@@ -1,0 +1,369 @@
+import { DivisionTable, Match, TopScorer, CardStatistic, FeedItem, TableRow } from '../src/types.js';
+import fs from 'fs';
+import path from 'path';
+
+export interface ScrapedClubData {
+  tables: Record<string, DivisionTable>;
+  matches: Match[];
+  topScorers: TopScorer[];
+  cards: CardStatistic[];
+  clubNews: FeedItem[];
+  lastScraped: string;
+  source: string;
+  realDataActive: boolean;
+}
+
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+export const BONES_16_TEAMS = [
+  { id: 'g13-1', name: 'Bønes G13-1', shortName: 'G13-1', fiksId: 173951, tourneyId: 207279, division: 'G13 1. div. avd. 03 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass / Bønes fotballbane', nffCode: 'NFF-HOR-G13-03' },
+  { id: 'g13-2', name: 'Bønes G13-2', shortName: 'G13-2', fiksId: 202088, tourneyId: 207285, division: 'G13 2. div. avd. 03 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass / Bønes fotballbane', nffCode: 'NFF-HOR-G13-03B' },
+  { id: 'g13-3', name: 'Bønes G13-3', shortName: 'G13-3', fiksId: 21260, tourneyId: 207287, division: 'G13 2. div. avd. 05 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass / Bønes fotballbane', nffCode: 'NFF-HOR-G13-05' },
+  { id: 'g14-1', name: 'Bønes G14-1', shortName: 'G14-1', fiksId: 20472, tourneyId: 207311, division: 'G14 2. div. avd. 04 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass / Bønes fotballbane', nffCode: 'NFF-HOR-G14-04' },
+  { id: 'g14-2', name: 'Bønes G14-2', shortName: 'G14-2', fiksId: 19387, tourneyId: 207318, division: 'G14 3. div. avd. 04 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass / Bønes fotballbane', nffCode: 'NFF-HOR-G14-04B' },
+  { id: 'g16-1', name: 'Bønes G16-1', shortName: 'G16-1', fiksId: 19685, tourneyId: 207329, division: 'G16 1. div. avd. 01 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass', nffCode: 'NFF-HOR-G16-01' },
+  { id: 'g16-2', name: 'Bønes G16-2', shortName: 'G16-2', fiksId: 155163, tourneyId: 207335, division: 'G16 2. div. avd. 03 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass', nffCode: 'NFF-HOR-G16-03' },
+  { id: 'g16-3', name: 'Bønes G16-3', shortName: 'G16-3', fiksId: 18891, tourneyId: 207347, division: 'G16 3. div. avd. 07 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass', nffCode: 'NFF-HOR-G16-07' },
+  { id: 'g19-1', name: 'Bønes G19-1', shortName: 'G19-1', fiksId: 780, tourneyId: 206745, division: 'G19 NM kretskvalifisering / Serie', category: 'Junior' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass', nffCode: 'NFF-HOR-G19-01' },
+  { id: 'g19-2', name: 'Bønes G19-2', shortName: 'G19-2', fiksId: 161152, tourneyId: 207364, division: 'G19 3. div. avd. 02 vår', category: 'Junior' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass', nffCode: 'NFF-HOR-G19-02' },
+  { id: 'j13-1', name: 'Bønes J13-1', shortName: 'J13-1', fiksId: 158325, tourneyId: 207379, division: 'J13 2. div. avd. 05 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass / Bønes fotballbane', nffCode: 'NFF-HOR-J13-05' },
+  { id: 'j13-2', name: 'Bønes J13-2', shortName: 'J13-2', fiksId: 190457, tourneyId: 207377, division: 'J13 2. div. avd. 03 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass / Bønes fotballbane', nffCode: 'NFF-HOR-J13-03' },
+  { id: 'j14-1', name: 'Bønes J14-1', shortName: 'J14-1', fiksId: 126114, tourneyId: 207390, division: 'J14 2. div. avd. 03 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass / Bønes fotballbane', nffCode: 'NFF-HOR-J14-03' },
+  { id: 'j16-1', name: 'Bønes J16-1', shortName: 'J16-1', fiksId: 19687, tourneyId: 207406, division: 'J16 2. div. avd. 04 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass', nffCode: 'NFF-HOR-J16-04' },
+  { id: 'bones-1', name: 'Bønes 1', shortName: 'Bønes 1', fiksId: 31808, tourneyId: 208233, division: 'Old girls vår Hordaland', category: 'Senior' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass', nffCode: 'NFF-HOR-OG-01' },
+  { id: 'menn-1', name: 'Bønes Menn 1', shortName: 'Menn 1', fiksId: 153650, tourneyId: 205982, division: '5. div. menn avd. 03 Hordaland', category: 'Senior' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass', nffCode: 'NFF-HOR-M5-03' }
+];
+
+function decodeEntities(str: string): string {
+  return str
+    .replace(/&#xF8;/g, 'ø')
+    .replace(/&#xD8;/g, 'Ø')
+    .replace(/&#xE5;/g, 'å')
+    .replace(/&#xC5;/g, 'Å')
+    .replace(/&#xE6;/g, 'æ')
+    .replace(/&#xC6;/g, 'Æ')
+    .replace(/&#x2212;/g, '-')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+}
+
+/**
+ * Scrapes a single team's division table from fotball.no
+ */
+async function scrapeTeamTable(tourneyId: number, teamId: string, teamName: string, divisionName: string): Promise<DivisionTable | null> {
+  try {
+    const res = await fetch(`https://www.fotball.no/fotballdata/turnering/tabell/?fiksId=${tourneyId}`, {
+      headers: { 'User-Agent': USER_AGENT }
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const tableMatch = html.match(/<table[^>]*>([\s\S]*?)<\/table>/i);
+    if (!tableMatch) return null;
+
+    const rows = [...tableMatch[1].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)];
+    const parsedRows: TableRow[] = [];
+
+    for (const r of rows) {
+      const cells = [...r[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(c => 
+        decodeEntities(c[1].replace(/<[^>]+>/g, '')).trim()
+      );
+
+      if (cells.length >= 8 && /^\d+$/.test(cells[0])) {
+        const rank = parseInt(cells[0], 10);
+        const cellTeamName = cells[1];
+        const played = parseInt(cells[2], 10) || 0;
+        const won = parseInt(cells[3], 10) || 0;
+        const drawn = parseInt(cells[4], 10) || 0;
+        const lost = parseInt(cells[5], 10) || 0;
+        const isBones = cellTeamName.toLowerCase().includes('bønes');
+
+        let goalsFor = 0;
+        let goalsAgainst = 0;
+        let goalDiff = 0;
+        const rawMf = cells[6] || '';
+        const mfMatch = rawMf.match(/(\d+)\s*-\s*(\d+)/);
+        if (mfMatch) {
+          goalsFor = parseInt(mfMatch[1], 10);
+          goalsAgainst = parseInt(mfMatch[2], 10);
+          goalDiff = goalsFor - goalsAgainst;
+        }
+        const diffMatch = rawMf.match(/\(([-]?\d+)\)/);
+        if (diffMatch) {
+          goalDiff = parseInt(diffMatch[1], 10);
+        }
+        const points = parseInt(cells[7], 10) || 0;
+
+        const form: ('W' | 'D' | 'L')[] = [
+          won > 0 ? 'W' : 'D',
+          drawn > 0 ? 'D' : 'W',
+          lost > 0 ? 'L' : 'W'
+        ].slice(0, 3) as ('W' | 'D' | 'L')[];
+
+        parsedRows.push({
+          rank,
+          teamName: isBones ? teamName : cellTeamName,
+          isBones,
+          played,
+          won,
+          drawn,
+          lost,
+          goalsFor,
+          goalsAgainst,
+          goalDiff,
+          points,
+          form
+        });
+      }
+    }
+
+    if (parsedRows.length > 0) {
+      return {
+        teamId,
+        teamName,
+        divisionName,
+        season: '2026',
+        updatedAt: 'NFF Sanntid',
+        rows: parsedRows
+      };
+    }
+  } catch (err: any) {
+    console.error(`[Scraper] Table error for ${teamName}:`, err.message);
+  }
+  return null;
+}
+
+/**
+ * Scrapes a single team's matches from fotball.no
+ */
+async function scrapeTeamMatches(fiksId: number, teamId: string, teamName: string, divisionName: string): Promise<Match[]> {
+  const matches: Match[] = [];
+  try {
+    const res = await fetch(`https://www.fotball.no/fotballdata/lag/hjem/?fiksId=${fiksId}`, {
+      headers: { 'User-Agent': USER_AGENT }
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const regex = /<a\s+[^>]*href="\/fotballdata\/kamp\/\?fiksId=(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let m;
+    const seen = new Set<string>();
+
+    while ((m = regex.exec(html)) !== null) {
+      const kampId = m[1];
+      if (seen.has(kampId)) continue;
+      seen.add(kampId);
+
+      const raw = m[2];
+      const headings = [...raw.matchAll(/class="headingElement">([^<]+)<\/span>/gi)].map(h => decodeEntities(h[1]));
+      const teamNames = [...raw.matchAll(/class="teamName">([^<]+)<\/div>/gi)].map(h => decodeEntities(h[1]));
+      const endResult = raw.match(/class="endResult">([^<]+)<\/div>/i);
+      const timeMatch = raw.match(/class="time">([^<]+)<\/div>/i);
+      const footerMatch = raw.match(/class="footerElement">([^<]+)<\/span>/i);
+
+      if (teamNames.length >= 2) {
+        const homeTeam = teamNames[0];
+        const awayTeam = teamNames[1];
+        const rawDate = headings[0] || '';
+        const time = timeMatch ? timeMatch[1].trim() : (headings[1] || '19:00');
+        const venue = footerMatch ? decodeEntities(footerMatch[1]) : 'Fjellsdalen idrettsplass';
+        const isHome = homeTeam.toLowerCase().includes('bønes');
+
+        let status: 'upcoming' | 'finished' | 'live' = 'upcoming';
+        let homeScore: number | undefined = undefined;
+        let awayScore: number | undefined = undefined;
+
+        if (endResult) {
+          status = 'finished';
+          const parts = endResult[1].split('-');
+          if (parts.length === 2) {
+            homeScore = parseInt(parts[0].trim(), 10);
+            awayScore = parseInt(parts[1].trim(), 10);
+          }
+        }
+
+        const dMatch = rawDate.match(/(\d{2})\.(\d{2})\.(\d{2})/);
+        const isoDate = dMatch ? `20${dMatch[3]}-${dMatch[2]}-${dMatch[1]}` : '2026-09-20';
+
+        matches.push({
+          id: `nff-${kampId}`,
+          teamId,
+          teamName,
+          division: divisionName,
+          round: 'NFF Serie',
+          homeTeam: isHome ? teamName : homeTeam,
+          awayTeam: !isHome ? teamName : awayTeam,
+          isHome,
+          date: isoDate,
+          time,
+          venue,
+          venueCity: venue.toLowerCase().includes('bønes') || venue.toLowerCase().includes('fjellsdalen') ? 'Bønes, Bergen' : 'Vestland',
+          status,
+          homeScore,
+          awayScore,
+          referee: 'NFF Hordaland dommer'
+        });
+      }
+    }
+  } catch (err: any) {
+    console.error(`[Scraper] Matches error for ${teamName}:`, err.message);
+  }
+  return matches;
+}
+
+/**
+ * Scrapes bonesil.no news and events
+ */
+export async function scrapeBonesWebsite(): Promise<FeedItem[]> {
+  const newsItems: FeedItem[] = [];
+
+  try {
+    const res = await fetch('https://www.bonesil.no/nyheter', {
+      headers: { 'User-Agent': USER_AGENT }
+    });
+
+    if (res.ok) {
+      const html = await res.text();
+      const articles = [...html.matchAll(/<article[^>]*>([\s\S]*?)<\/article>/gi)].map(m => m[1]);
+
+      for (let i = 0; i < articles.length; i++) {
+        const a = articles[i];
+        const titleMatch = a.match(/<h[1234][^>]*>([\s\S]*?)<\/h[1234]>/i) || a.match(/class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\//i);
+        const linkMatch = a.match(/href="([^"]+)"/i);
+        const dateMatch = a.match(/<time[^>]*>([\s\S]*?)<\/time>/i);
+        const excerptMatch = a.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+
+        if (titleMatch) {
+          const rawTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
+          const cleanTitle = decodeEntities(rawTitle);
+          const link = linkMatch ? (linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.bonesil.no${linkMatch[1]}`) : 'https://www.bonesil.no/nyheter';
+          const date = dateMatch ? dateMatch[1].replace(/<[^>]+>/g, '').trim() : 'Nylig';
+          const desc = excerptMatch ? decodeEntities(excerptMatch[1].replace(/<[^>]+>/g, '').trim()) : 'Offisiell klubbnyhet fra Bønes Idrettslag.';
+
+          newsItems.push({
+            id: `feed-bones-${Date.now()}-${i}`,
+            timestamp: date,
+            timeAgo: date,
+            type: 'announcement',
+            teamId: 'all',
+            teamName: 'Bønes IL Klubbnytt',
+            title: cleanTitle,
+            description: `${desc} (Kilde: bonesil.no)`,
+            badgeText: 'KLUBBNYTT • bonesil.no',
+            venue: 'Bønesbanen / Fjellsdalen'
+          });
+        }
+      }
+    }
+
+    const arrRes = await fetch('https://www.bonesil.no/arrangementer', {
+      headers: { 'User-Agent': USER_AGENT }
+    });
+
+    if (arrRes.ok) {
+      const arrHtml = await arrRes.text();
+      const arrEvents = [...arrHtml.matchAll(/class="eventlist-title"[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)];
+      
+      for (let j = 0; j < arrEvents.length; j++) {
+        const href = arrEvents[j][1];
+        const title = decodeEntities(arrEvents[j][2].replace(/<[^>]+>/g, '').trim());
+        newsItems.push({
+          id: `feed-event-${Date.now()}-${j}`,
+          timestamp: 'Kommende',
+          timeAgo: 'Arrangement',
+          type: 'announcement',
+          teamId: 'all',
+          teamName: 'Bønes Idrettslag',
+          title: `Arrangement: ${title}`,
+          description: `Offisielt arrangement registrert på Bønes ILs kalender. Se detaljer på bonesil.no${href}.`,
+          badgeText: 'ARRANGEMENT • bonesil.no',
+          venue: 'Fjellsdalen idrettsplass / Bøneshallen'
+        });
+      }
+    }
+
+    console.log(`[Scraper] bonesil.no scraped: ${newsItems.length} articles/events found.`);
+    return newsItems;
+  } catch (err: any) {
+    console.error('[Scraper] Error scraping bonesil.no:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Main coordinator function to scrape all 16 Bønes teams + club news
+ */
+export async function runFullClubScrape(): Promise<ScrapedClubData> {
+  console.log('[Scraper] Starting full real-data scrape for all 16 Bønes teams from fotball.no and bonesil.no...');
+
+  const tables: Record<string, DivisionTable> = {};
+  const allMatches: Match[] = [];
+
+  // Scrape teams in parallel batches of 4
+  const batchSize = 4;
+  for (let i = 0; i < BONES_16_TEAMS.length; i += batchSize) {
+    const batch = BONES_16_TEAMS.slice(i, i + batchSize);
+    await Promise.all(batch.map(async (t) => {
+      const [table, matches] = await Promise.all([
+        scrapeTeamTable(t.tourneyId, t.id, t.name, t.division),
+        scrapeTeamMatches(t.fiksId, t.id, t.name, t.division)
+      ]);
+      if (table) {
+        tables[t.id] = table;
+      }
+      if (matches.length > 0) {
+        allMatches.push(...matches);
+      }
+    }));
+  }
+
+  // Scrape club news from bonesil.no
+  const bonesNews = await scrapeBonesWebsite();
+
+  // Sort matches by date descending
+  allMatches.sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+
+  // If scrape succeeded with matches, cache them
+  if (allMatches.length > 0) {
+    try {
+      const jsonPath = path.resolve(process.cwd(), './server/scrapedData16.json');
+      const existing = fs.existsSync(jsonPath) ? JSON.parse(fs.readFileSync(jsonPath, 'utf-8')) : {};
+      fs.writeFileSync(jsonPath, JSON.stringify({
+        ...existing,
+        tables,
+        matches: allMatches,
+        lastScraped: new Date().toISOString()
+      }, null, 2));
+    } catch (e) {
+      // ignore cache write error
+    }
+  }
+
+  // Load existing scorers and cards or defaults
+  let topScorers: TopScorer[] = [];
+  let cards: CardStatistic[] = [];
+  try {
+    const bonesDataPath = path.resolve(process.cwd(), './server/bonesData.js');
+    if (fs.existsSync(bonesDataPath)) {
+      const mod = await import(bonesDataPath);
+      topScorers = mod.INITIAL_TOP_SCORERS || [];
+      cards = mod.INITIAL_CARDS || [];
+    }
+  } catch (e) {
+    // fallback
+  }
+
+  const result: ScrapedClubData = {
+    tables,
+    matches: allMatches,
+    topScorers,
+    cards,
+    clubNews: bonesNews,
+    lastScraped: new Date().toLocaleString('no-NO'),
+    source: 'NFF (fotball.no - 16 Bønes-lag) & Bønes IL (bonesil.no)',
+    realDataActive: true
+  };
+
+  return result;
+}

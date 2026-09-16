@@ -1,0 +1,6 @@
+{
+  "name": "Bønes IL Fotball Live",
+  "description": "Liveoppdatering, toppscorere, kortstatistikk, tabeller og kampprogram med uthevede hjemmekamper for alle lag i Bønes IL.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
