@@ -12,8 +12,7 @@ import {
   CheckCircle2,
   Clock,
   MapPin,
-  Shield,
-  SendHorizontal
+  Shield
 } from 'lucide-react';
 
 interface LiveFeedViewProps {
@@ -21,8 +20,6 @@ interface LiveFeedViewProps {
   selectedTeamId: string;
   onManualScan: () => void;
   isScanning: boolean;
-  onSimulateEvent: () => void;
-  isSimulating: boolean;
   scanner: ScannerState;
 }
 
@@ -31,8 +28,6 @@ export const LiveFeedView: React.FC<LiveFeedViewProps> = ({
   selectedTeamId,
   onManualScan,
   isScanning,
-  onSimulateEvent,
-  isSimulating,
   scanner
 }) => {
   const [filterType, setFilterType] = useState<string>('all');
@@ -77,7 +72,7 @@ export const LiveFeedView: React.FC<LiveFeedViewProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5 flex items-center space-x-2">
-              <span>Overvåker fotball.no & FIKS fortløpende</span>
+              <span>Kilde: NFF fotball.no</span>
               <span>•</span>
               <span className="font-mono text-emerald-600 font-semibold">
                 Neste autoskann om {scanner.nextScanSeconds}s
@@ -88,27 +83,15 @@ export const LiveFeedView: React.FC<LiveFeedViewProps> = ({
 
         {/* Right: Actions */}
         <div className="flex items-center space-x-2">
-          {/* Simulate Event Button */}
-          <button
-            id="btn-simulate-feed-event"
-            onClick={onSimulateEvent}
-            disabled={isSimulating}
-            className="flex items-center space-x-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50"
-            title="Generer en direkte live-hendelse (mål, kort eller tabellendring) for testing av sanntidsfeeden"
-          >
-            <SendHorizontal className={`w-3.5 h-3.5 text-amber-400 ${isSimulating ? 'animate-pulse' : ''}`} />
-            <span>{isSimulating ? 'Genererer...' : 'Test live-hendelse'}</span>
-          </button>
-
           {/* Manual Scan */}
           <button
             id="btn-feed-manual-scan"
             onClick={onManualScan}
             disabled={isScanning}
-            className="flex items-center space-x-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50"
+            className="flex items-center space-x-1.5 px-3 py-2 bg-[#165094] hover:bg-[#0F3A6D] text-white rounded-lg text-xs font-bold transition-all shadow-xs disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-            <span>{isScanning ? 'Skanner NFF...' : 'Skann nå'}</span>
+            <span>{isScanning ? 'Sjekker NFF...' : 'Skann nå'}</span>
           </button>
         </div>
 
@@ -260,13 +243,21 @@ export const LiveFeedView: React.FC<LiveFeedViewProps> = ({
 
                         {item.badgeText && (
                           <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase ${
-                            item.type === 'goal'
+                            item.source === 'lagleder'
+                              ? 'bg-[#3E8A37] text-white'
+                              : item.type === 'goal'
                               ? 'bg-red-600 text-white'
                               : item.type === 'card'
                               ? 'bg-amber-100 text-amber-900 border border-amber-300'
                               : 'bg-slate-100 text-slate-700'
                           }`}>
                             {item.badgeText}
+                          </span>
+                        )}
+
+                        {item.source === 'lagleder' && item.reportedBy && (
+                          <span className="text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded">
+                            Meldt av: {item.reportedBy}
                           </span>
                         )}
 

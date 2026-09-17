@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import { CardStatistic, TeamInfo } from '../types.js';
-import { AlertTriangle, ShieldAlert, CheckCircle, Scale, AlertOctagon } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, CheckCircle, Scale, AlertOctagon, User, TrendingUp, Sparkles } from 'lucide-react';
 
 interface CardsViewProps {
   cards: CardStatistic[];
   teams: TeamInfo[];
   selectedTeamId: string;
+  onSelectPlayer?: (playerName: string, teamId?: string) => void;
 }
 
-export const CardsView: React.FC<CardsViewProps> = ({ cards, teams, selectedTeamId }) => {
+export const CardsView: React.FC<CardsViewProps> = ({ cards, teams, selectedTeamId, onSelectPlayer }) => {
   const [localTeamFilter, setLocalTeamFilter] = useState<string>(selectedTeamId);
 
   const activeTeamFilter = selectedTeamId !== 'all' ? selectedTeamId : localTeamFilter;
@@ -25,6 +26,19 @@ export const CardsView: React.FC<CardsViewProps> = ({ cards, teams, selectedTeam
   return (
     <div id="cards-view-container" className="space-y-4">
       
+      {/* Informative helper note */}
+      <div className="bg-gradient-to-r from-amber-50 via-slate-50 to-blue-50 border border-amber-200/80 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-slate-700 shadow-2xs">
+        <div className="flex items-center space-x-2">
+          <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>
+            <strong>Klikkbare spillere:</strong> Trykk på et spillernavn for å se spillerens detaljerte sesongstatistikk, inkludert formkurve og totalt antall spilte kamper i både vår- og høstsesongen.
+          </span>
+        </div>
+        <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-200">
+          Disiplinærregister 2026
+        </span>
+      </div>
+
       {/* Fair Play & Suspension Warning Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         
@@ -84,7 +98,7 @@ export const CardsView: React.FC<CardsViewProps> = ({ cards, teams, selectedTeam
               </h3>
             </div>
             <p className="text-xs text-slate-300 mt-0.5">
-              Offisiell registrering av advarsler, utvisninger og soningsstatus iht. NFF-reglement
+              Offisiell registrering av advarsler, utvisninger og soningsstatus iht. NFF-reglement for alle 16 avdelinger (Høstsesongen 2026)
             </p>
           </div>
 
@@ -113,7 +127,7 @@ export const CardsView: React.FC<CardsViewProps> = ({ cards, teams, selectedTeam
             <thead className="bg-slate-100 text-slate-600 uppercase text-[11px] font-bold tracking-wider border-b border-slate-200">
               <tr>
                 <th scope="col" className="py-3 px-4 text-center w-12">#</th>
-                <th scope="col" className="py-3 px-4">Spiller</th>
+                <th scope="col" className="py-3 px-4">Spiller (klikk for profil)</th>
                 <th scope="col" className="py-3 px-3">Lag</th>
                 <th scope="col" className="py-3 px-3 text-center">Kamper</th>
                 <th scope="col" className="py-3 px-3 text-center">🟨 Gule</th>
@@ -130,7 +144,7 @@ export const CardsView: React.FC<CardsViewProps> = ({ cards, teams, selectedTeam
                 return (
                   <tr
                     key={card.id}
-                    className={`hover:bg-slate-50 transition-colors ${
+                    className={`hover:bg-blue-50/40 transition-colors ${
                       isSuspended ? 'bg-red-50/50' : isWarning ? 'bg-amber-50/30' : ''
                     }`}
                   >
@@ -138,8 +152,21 @@ export const CardsView: React.FC<CardsViewProps> = ({ cards, teams, selectedTeam
                       {idx + 1}
                     </td>
 
-                    <td className="py-3 px-4 font-bold text-slate-900">
-                      {card.name}
+                    <td className="py-3 px-4">
+                      <button
+                        type="button"
+                        onClick={() => onSelectPlayer?.(card.name, card.teamId)}
+                        className="flex items-center space-x-2 text-left group hover:opacity-90 transition-opacity focus:outline-hidden"
+                        title={`Vis spillerprofil og formkurve for ${card.name}`}
+                      >
+                        <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-800 flex items-center justify-center text-[10px] font-bold font-mono shrink-0 group-hover:bg-[#165094] group-hover:text-white transition-colors">
+                          <User className="w-3.5 h-3.5" />
+                        </div>
+                        <span className="font-bold text-slate-900 text-sm group-hover:text-[#165094] group-hover:underline">
+                          {card.name}
+                        </span>
+                        <TrendingUp className="w-3 h-3 text-slate-400 group-hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </button>
                     </td>
 
                     <td className="py-3 px-3">

@@ -65,6 +65,63 @@ export interface CardStatistic {
   isBonesPlayer: boolean;
 }
 
+export interface PlayerMatchLog {
+  id: string;
+  date: string;
+  season: 'Vår' | 'Høst';
+  opponent: string;
+  isHome: boolean;
+  score: string;
+  result: 'W' | 'D' | 'L';
+  goals: number;
+  yellowCard: boolean;
+  redCard: boolean;
+  minutes: number;
+  rating: number; // 6.0 - 9.8
+  highlight?: string;
+}
+
+export interface PlayerSeasonStats {
+  matches: number;
+  goals: number;
+  penalties: number;
+  yellowCards: number;
+  redCards: number;
+  goalsPerMatch: number;
+  divisionName: string;
+  minutesPlayed: number;
+}
+
+export interface PlayerProfile {
+  name: string;
+  teamId: string;
+  teamName: string;
+  division: string;
+  category: TeamCategory;
+  jerseyNumber: number;
+  position: string;
+  isBonesPlayer: boolean;
+  spring: PlayerSeasonStats;
+  autumn: PlayerSeasonStats;
+  total: {
+    matches: number;
+    goals: number;
+    penalties: number;
+    yellowCards: number;
+    redCards: number;
+    points: number;
+    goalsPerMatch: number;
+    minutesPlayed: number;
+  };
+  cardStatus: 'Klar' | 'Advarsel (1 fra soning)' | 'Karantene';
+  recentGoalStreak?: number;
+  topScorerRank?: number;
+  cardRank?: number;
+  formSummary: ('W' | 'D' | 'L')[];
+  formTrend: 'rising' | 'steady' | 'declining';
+  matchHistory: PlayerMatchLog[];
+}
+
 export interface MatchEvent {
   id: string;
   minute: number;
@@ -72,6 +129,8 @@ export interface MatchEvent {
   player?: string;
   team: string;
   description: string;
+  source?: 'NFF' | 'lagleder' | 'official';
+  reportedBy?: string;
 }
 
 export interface Match {
@@ -94,6 +153,9 @@ export interface Match {
   referee?: string;
   events?: MatchEvent[];
   attendance?: number;
+  lastUpdatedSource?: 'NFF' | 'lagleder' | 'official';
+  lastUpdatedAt?: string;
+  reportedBy?: string;
 }
 
 export interface ScanLog {
@@ -135,6 +197,8 @@ export interface FeedItem {
   score?: string;
   minute?: number;
   player?: string;
+  source?: 'NFF' | 'lagleder' | 'bonesil_news' | 'system';
+  reportedBy?: string;
   impact?: {
     type: 'topscorer' | 'card_warning' | 'table_rank' | 'fixture';
     detail: string;
@@ -162,4 +226,23 @@ export interface BonesClubData {
   dailyScrapeSchedule?: string;
   nextDailyScrape?: string;
   isScrapingNow?: boolean;
+  activeMatchWindow?: boolean;
+  matchWindowDetails?: string;
+  processedEventIds?: string[];
+  dataVersion?: number;
+  lastDiskSaved?: string;
+}
+
+export interface LaglederReportRequest {
+  matchId: string;
+  reporterName: string;
+  action: 'goal' | 'card' | 'sub' | 'status_change' | 'score_adjust';
+  team: string;
+  minute: number;
+  player?: string;
+  cardType?: 'yellow' | 'red';
+  matchStatus?: 'upcoming' | 'live' | 'finished';
+  homeScore?: number;
+  awayScore?: number;
+  description?: string;
 }

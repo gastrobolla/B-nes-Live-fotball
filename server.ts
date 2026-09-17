@@ -2,18 +2,9 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-import {
-  INITIAL_TEAMS,
-  INITIAL_TABLES,
-  INITIAL_TOP_SCORERS,
-  INITIAL_CARDS,
-  INITIAL_MATCHES,
-  INITIAL_SCANNER_STATE,
-  INITIAL_FEED_ITEMS,
-  getClubData
-} from './server/bonesData.js';
-import { BonesClubData, ScanLog, MatchEvent, FeedItem } from './src/types.js';
-import { runFullClubScrape, BONES_16_TEAMS } from './server/bonesScraper.js';
+import { BonesClubData, ScanLog, MatchEvent, FeedItem, Match, LaglederReportRequest } from './src/types.js';
+import { runFullClubScrape, BONES_16_TEAMS, scrapeMatchEvents } from './server/bonesScraper.js';
+import { loadPersistedData, savePersistedData } from './server/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,8 +14,128 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// Initialize database with initial values pre-populated with real scraped data for all 16 teams
-let currentData: BonesClubData = getClubData();
+// Load persistent database from disk (survives container restarts)
+let currentData: BonesClubData = loadPersistedData();
+
+// Function to check if we are currently inside an active match window
+function checkMatchWindow(): { isActive: boolean; activeMatches: Match[]; details: string } {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  const activeMatches = currentData.matches.filter(m => {
+    if (m.status === 'live') return true;
+    if (m.date === todayStr && m.status !== 'finished') {
+      const parts = m.time.split(':').map(Number);
+      if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        const matchMinutes = parts[0] * 60 + parts[1];
+        // 15 minutes before kickoff up to 135 minutes after kickoff
+        return currentMinutes >= (matchMinutes - 15) && currentMinutes <= (matchMinutes + 135);
+      }
+    }
+    return false;
+  });
+
+  if (activeMatches.length > 0) {
+    const desc = activeMatches.map(m => `${m.homeTeam} vs ${m.awayTeam} (${m.time})`).join(', ');
+    return {
+      isActive: true,
+      activeMatches,
+      details: `🟢 Kampvindu aktivt: ${desc}. NFF sjekkes hvert 60. sekund.`
+    };
+  }
+
+  return {
+    isActive: false,
+    activeMatches: [],
+    details: 'Rolig modus: Ingen kamper i aktivt kampvindu akkurat nå. NFF skannes ved oppstart og daglig kl. 06:00.'
+  };
+}
+
+// Function to apply match events (goals and cards) to topScorers and cards
+function applyMatchEventsToScorersAndCards(matches: Match[]): { newGoals: number; newCards: number } {
+  let newGoals = 0;
+  let newCards = 0;
+
+  if (!currentData.processedEventIds) {
+    currentData.processedEventIds = [];
+  }
+  const processedSet = new Set<string>(currentData.processedEventIds);
+
+  for (const match of matches) {
+    if (!match.events || match.events.length === 0) continue;
+
+    for (const ev of match.events) {
+      if (processedSet.has(ev.id)) continue;
+      processedSet.add(ev.id);
+
+      if (!ev.player) continue;
+      const playerName = ev.player.trim();
+      if (!playerName) continue;
+
+      const isBonesEvent =
+        (ev.team && ev.team.toLowerCase().includes('bønes')) ||
+        (match.homeTeam.toLowerCase().includes('bønes') && ev.team === match.homeTeam) ||
+        (match.awayTeam.toLowerCase().includes('bønes') && ev.team === match.awayTeam) ||
+        (!ev.team && (match.homeTeam.toLowerCase().includes('bønes') || match.awayTeam.toLowerCase().includes('bønes')));
+
+      if (!isBonesEvent) continue;
+
+      if (ev.type === 'goal') {
+        let scorer = currentData.topScorers.find(ts => ts.name.toLowerCase() === playerName.toLowerCase());
+        if (scorer) {
+          scorer.goals += 1;
+          scorer.goalsPerMatch = Number((scorer.goals / Math.max(1, scorer.matches)).toFixed(2));
+        } else {
+          scorer = {
+            id: `scorer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            name: playerName,
+            teamId: match.teamId,
+            teamName: match.teamName,
+            goals: 1,
+            matches: 1,
+            penalties: 0,
+            goalsPerMatch: 1.0,
+            isBonesPlayer: true
+          };
+          currentData.topScorers.push(scorer);
+        }
+        newGoals++;
+      } else if (ev.type === 'yellow_card' || ev.type === 'red_card') {
+        const isRed = ev.type === 'red_card';
+        let cardEntry = currentData.cards.find(c => c.name.toLowerCase() === playerName.toLowerCase());
+        if (cardEntry) {
+          if (isRed) cardEntry.redCards += 1;
+          else cardEntry.yellowCards += 1;
+          cardEntry.points = cardEntry.yellowCards + (cardEntry.redCards * 3);
+          cardEntry.status = cardEntry.redCards > 0 || cardEntry.yellowCards >= 4 ? 'Karantene' : cardEntry.yellowCards === 3 ? 'Advarsel (1 fra soning)' : 'Klar';
+        } else {
+          cardEntry = {
+            id: `card-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            name: playerName,
+            teamId: match.teamId,
+            teamName: match.teamName,
+            yellowCards: isRed ? 0 : 1,
+            redCards: isRed ? 1 : 0,
+            points: isRed ? 3 : 1,
+            status: isRed ? 'Karantene' : 'Klar',
+            matches: 1,
+            isBonesPlayer: true
+          };
+          currentData.cards.push(cardEntry);
+        }
+        newCards++;
+      }
+    }
+  }
+
+  currentData.processedEventIds = Array.from(processedSet);
+  currentData.topScorers.sort((a, b) => b.goals - a.goals);
+  currentData.cards.sort((a, b) => b.points - a.points);
+  currentData.stats.totalGoalsScored = currentData.topScorers.reduce((acc, curr) => acc + curr.goals, 0);
+
+  return { newGoals, newCards };
+}
 
 // Function to synchronize real data from NFF & bonesil.no
 async function syncRealData(): Promise<void> {
@@ -37,16 +148,36 @@ async function syncRealData(): Promise<void> {
     if (scraped.tables && Object.keys(scraped.tables).length > 0) {
       for (const [teamId, table] of Object.entries(scraped.tables)) {
         currentData.tables[teamId] = table;
-        const bonesRow = table.rows.find(r => r.isBones);
-        const team = currentData.teams.find(t => t.id === teamId);
-        if (team && bonesRow) {
-          team.currentRank = bonesRow.rank;
-          team.totalTeamsInDivision = table.rows.length;
+        if (!teamId.endsWith('_host') && !teamId.endsWith('_var')) {
+          const bonesRow = table.rows.find(r => r.isBones);
+          const team = currentData.teams.find(t => t.id === teamId);
+          if (team) {
+            team.division = table.divisionName;
+            team.totalTeamsInDivision = table.rows.length;
+            if (bonesRow) {
+              team.currentRank = bonesRow.rank;
+            }
+          }
         }
       }
     }
 
     if (scraped.matches.length > 0) {
+      // Merge matches preserving any lagleder events already reported
+      for (const newMatch of scraped.matches) {
+        const existing = currentData.matches.find(m => m.id === newMatch.id);
+        if (existing && existing.events && existing.events.length > 0) {
+          const laglederEvents = existing.events.filter(e => e.source === 'lagleder');
+          if (laglederEvents.length > 0) {
+            newMatch.events = [...(newMatch.events || []), ...laglederEvents];
+          }
+          if (existing.status === 'live' && newMatch.status === 'upcoming') {
+            newMatch.status = 'live';
+            newMatch.homeScore = existing.homeScore;
+            newMatch.awayScore = existing.awayScore;
+          }
+        }
+      }
       currentData.matches = scraped.matches;
       currentData.stats.totalMatchesRecorded = scraped.matches.length;
       currentData.stats.upcomingHomeMatches = scraped.matches.filter(m => m.isHome && m.status === 'upcoming').length;
@@ -70,14 +201,23 @@ async function syncRealData(): Promise<void> {
       }
     }
 
+    const windowInfo = checkMatchWindow();
+    currentData.activeMatchWindow = windowInfo.isActive;
+    currentData.matchWindowDetails = windowInfo.details;
     currentData.isRealData = true;
     currentData.realDataSource = 'NFF (fotball.no - 16 Bønes-lag) & Bønes IL (bonesil.no)';
     currentData.lastRealScraped = scraped.lastScraped;
-    currentData.dailyScrapeSchedule = 'Aktiv (automatisk skanning hver 24. time / kl. 06:00)';
+    currentData.dailyScrapeSchedule = 'Aktiv (automatisk skanning hver 24. time / kl. 06:00, samt hvert minutt i kampvinduer)';
     currentData.nextDailyScrape = new Date(Date.now() + 24 * 60 * 60 * 1000).toLocaleString('no-NO');
     currentData.isScrapingNow = false;
 
-    addScanLog('success', 'Ekte NFF & Bønes Skraper', `Ekte data synkronisert: ${Object.keys(scraped.tables).length} tabeller, ${scraped.matches.length} kamper, ${currentData.topScorers.length} toppscorere, ${currentData.cards.length} kort, og ${scraped.clubNews.length} klubbnyheter.`);
+    // Apply any match events to scorers and cards
+    applyMatchEventsToScorersAndCards(currentData.matches);
+
+    // Persist to disk
+    savePersistedData(currentData);
+
+    addScanLog('success', 'Ekte NFF & Bønes Skraper', `Ekte data lagret til database: ${Object.keys(scraped.tables).length} tabeller, ${scraped.matches.length} kamper, ${currentData.topScorers.length} toppscorere, ${currentData.cards.length} kort, og ${scraped.clubNews.length} klubbnyheter.`);
   } catch (err: any) {
     currentData.isScrapingNow = false;
     addScanLog('warning', 'Ekte NFF Skraper Feil', `Scraperen rapporterte: ${err?.message || 'Nettverksfeil'}`);
@@ -130,109 +270,51 @@ function addScanLog(level: 'info' | 'success' | 'update' | 'warning', source: st
   }
 }
 
-// Live scanner cycle
-function runScannerCycle(manual: boolean = false) {
+// Real scanner cycle - strictly checks actual match windows and NFF without fabricated simulation
+async function runScannerCycle(manual: boolean = false): Promise<void> {
   const now = new Date();
   currentData.scanner.lastScanned = now.toLocaleTimeString('no-NO');
   currentData.scanner.nextScanSeconds = 60;
 
-  // Mark sources as scanning briefly, then synced
+  const windowInfo = checkMatchWindow();
+  currentData.activeMatchWindow = windowInfo.isActive;
+  currentData.matchWindowDetails = windowInfo.details;
+
+  // Mark sources with real timestamps
   currentData.scanner.sources.forEach(s => {
-    s.lastSync = 'Akkurat nå (' + now.toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' }) + ')';
+    s.lastSync = 'Sjekket ' + now.toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' });
     s.status = 'synced';
   });
 
-  // Advance live match if exists
-  const liveMatch = currentData.matches.find(m => m.status === 'live');
-  if (liveMatch && liveMatch.currentMinute !== undefined) {
-    if (liveMatch.currentMinute < 90) {
-      liveMatch.currentMinute += manual ? 2 : 1;
-      
-      // Potential spontaneous live event
-      if (Math.random() > 0.65) {
-        const eventsPool: { type: 'goal' | 'yellow_card' | 'sub'; team: string; player: string; desc: string }[] = [
-          { type: 'sub', team: 'Bønes IL', player: 'Magnus Nybø inn for Kristian Bøe', desc: 'Bytte for Bønes IL: Bøe ut med applaus fra Bønesbanen-tribunen, Nybø inn.' },
-          { type: 'yellow_card', team: 'Mathopen IL', player: 'Anders Moen', desc: 'Gult kort for ureglementert armbruk i luftduell mot Eirik Helle.' },
-          { type: 'goal', team: 'Bønes IL', player: 'Eirik Helle Soltvedt', desc: 'MÅL FOR BØNES! Kontring i ekspressfart, og Helle klinker ballen kontant i nettaket! 3-1 til Bønes!' },
-          { type: 'sub', team: 'Mathopen IL', player: 'Jens Vik inn for Preben Hansen', desc: 'Bytte for gjestene: Friske bein i angrepet.' }
-        ];
-
-        const chosen = eventsPool[Math.floor(Math.random() * eventsPool.length)];
-        // If it's a goal and we haven't reached 3-1 yet:
-        if (chosen.type === 'goal' && liveMatch.homeScore === 2) {
-          liveMatch.homeScore = 3;
-          // Also update top scorer goals
-          const scorer = currentData.topScorers.find(ts => ts.name.includes('Eirik Helle'));
-          if (scorer) {
-            scorer.goals += 1;
-            scorer.goalsPerMatch = Number((scorer.goals / scorer.matches).toFixed(2));
-          }
-          addScanLog('update', 'Live Match Scanner', `MÅL PÅ BØNESBANEN! ${liveMatch.homeTeam} ${liveMatch.homeScore} - ${liveMatch.awayScore} ${liveMatch.awayTeam} (${chosen.player} ${liveMatch.currentMinute}')`);
-          
-          addFeedItem({
-            type: 'goal',
-            teamId: liveMatch.teamId,
-            teamName: liveMatch.homeTeam,
-            title: `MÅL PÅ BØNESBANEN! ${liveMatch.homeScore} - ${liveMatch.awayScore}`,
-            description: `${chosen.player} scorer igjen for Bønes! Ekstatisk jubel på tribunen!`,
-            badgeText: `MÅL • ${liveMatch.currentMinute}'`,
-            isHomeMatch: true,
-            venue: liveMatch.venue,
-            score: `${liveMatch.homeScore} - ${liveMatch.awayScore}`,
-            minute: liveMatch.currentMinute,
-            player: chosen.player,
-            impact: {
-              type: 'topscorer',
-              detail: `Eirik Helle Soltvedt øker sin ledelse med ${scorer?.goals || 15} mål totalt.`
-            }
-          });
-        } else if (chosen.type === 'yellow_card') {
-          addScanLog('warning', 'NFF Kampskjema', `Dommer varslet gult kort til ${chosen.player} (${chosen.team}) i det ${liveMatch.currentMinute}. minutt.`);
-          addFeedItem({
-            type: 'card',
-            teamId: liveMatch.teamId,
-            teamName: chosen.team,
-            title: `GULT KORT: ${chosen.player}`,
-            description: `Advarsel tildelt etter tøff duell (${liveMatch.currentMinute}').`,
-            badgeText: `🟨 GULT KORT • ${liveMatch.currentMinute}'`,
-            isHomeMatch: true,
-            venue: liveMatch.venue,
-            minute: liveMatch.currentMinute,
-            player: chosen.player
-          });
-        } else {
-          addScanLog('info', 'Live Ticker', `${chosen.desc} (${liveMatch.currentMinute}')`);
+  if (windowInfo.isActive && windowInfo.activeMatches.length > 0) {
+    // Inside active match window: scrape events for active matches directly from NFF
+    addScanLog('info', 'Kampvindu Skanner', `Sjekker NFF for ${windowInfo.activeMatches.length} aktive kamper...`);
+    for (const match of windowInfo.activeMatches) {
+      try {
+        const events = await scrapeMatchEvents(match);
+        if (events && events.length > 0) {
+          match.events = events;
         }
-
-        const newEvent: MatchEvent = {
-          id: `ev-${Date.now()}`,
-          minute: liveMatch.currentMinute,
-          type: chosen.type,
-          player: chosen.player,
-          team: chosen.team,
-          description: chosen.desc
-        };
-        if (!liveMatch.events) liveMatch.events = [];
-        liveMatch.events.push(newEvent);
+      } catch (err: any) {
+        console.warn(`[MatchWindow] Could not scrape events for ${match.id}:`, err.message);
       }
-    } else if (liveMatch.currentMinute >= 90 && liveMatch.status === 'live') {
-      liveMatch.status = 'finished';
-      addScanLog('success', 'NFF FIKS', `Sluttsignal på Bønesbanen: ${liveMatch.homeTeam} ${liveMatch.homeScore} - ${liveMatch.awayScore} ${liveMatch.awayTeam}. Offisielt kampskjema godkjent.`);
     }
   }
 
-  // Recalculate stats
+  // Recalculate stats based on verified database
   currentData.stats.upcomingHomeMatches = currentData.matches.filter(m => m.isHome && m.status === 'upcoming').length;
   currentData.stats.totalGoalsScored = currentData.topScorers.reduce((acc, curr) => acc + curr.goals, 0);
 
+  applyMatchEventsToScorersAndCards(currentData.matches);
+
   if (manual) {
-    addScanLog('success', 'Offisiell NFF Skanner', 'Full manuell skanning fullført for alle 9 avdelinger. Alle tabeller og spillerbørser er 100% synkronisert.');
-  } else {
-    addScanLog('info', 'Autoskanner (60s)', `Periodisk kontroll mot fotball.no & NFF Hordaland. Status: Alle data oppdatert (${now.toLocaleTimeString('no-NO')}).`);
+    addScanLog('success', 'Offisiell NFF Kontroll', 'Manuell synkronisering fullført mot fotball.no.');
   }
+
+  savePersistedData(currentData);
 }
 
-// Background timer running every 10 seconds to decrement countdown and run scanner every 60s
+// Background timer running every second to decrement countdown and run scanner every 60s
 setInterval(() => {
   if (currentData.scanner.autoScanEnabled) {
     if (currentData.scanner.nextScanSeconds <= 1) {
@@ -243,33 +325,351 @@ setInterval(() => {
   }
 }, 1000);
 
+// Daily autoscrape timer - checks every 60 seconds whether a daily autoscrape is due (kl. 06:00)
+let lastDailyScrapeDate = new Date().toISOString().split('T')[0];
+setInterval(async () => {
+  const today = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  if (today !== lastDailyScrapeDate && now.getHours() >= 6) {
+    lastDailyScrapeDate = today;
+    console.log(`[Daily Scraper] Executing automated daily autoscrape for Bønes IL (${today})...`);
+    addScanLog('info', 'Planlagt Daglig Skanner', `Kjører automatisk daglig NFF-autoscrape for ${today}...`);
+    await syncRealData();
+  }
+}, 60000);
+
 // API ROUTES
+
+// 1. Full data retrieval
 app.get('/api/bones/data', (req, res) => {
   res.json(currentData);
 });
 
-// Trigger on-demand real scrape from fotball.no and bonesil.no
+// 2. Lightweight check for version & match window
+app.get('/api/bones/data/check', (req, res) => {
+  const windowInfo = checkMatchWindow();
+  res.json({
+    dataVersion: currentData.dataVersion || 1,
+    lastDiskSaved: currentData.lastDiskSaved,
+    lastRealScraped: currentData.lastRealScraped,
+    activeMatchWindow: windowInfo.isActive,
+    matchWindowDetails: windowInfo.details,
+    isScrapingNow: currentData.isScrapingNow
+  });
+});
+
+// 3. Autoscrape status
+app.get('/api/bones/autoscrape/status', (req, res) => {
+  const windowInfo = checkMatchWindow();
+  res.json({
+    status: 'active',
+    dailyScrapeSchedule: currentData.dailyScrapeSchedule || 'Aktiv (hver 24. time / kl. 06:00)',
+    lastRealScraped: currentData.lastRealScraped,
+    nextDailyScrape: currentData.nextDailyScrape,
+    autoScanEnabled: currentData.scanner.autoScanEnabled,
+    activeMatchWindow: windowInfo.isActive,
+    matchWindowDetails: windowInfo.details,
+    lastDiskSaved: currentData.lastDiskSaved,
+    dataVersion: currentData.dataVersion || 1
+  });
+});
+
+// 4. Lagleder / Trener direct live reporting (Fastest & authoritative grassroots source!)
+app.post('/api/bones/match/:matchId/report', (req, res) => {
+  const { matchId } = req.params;
+  const body: LaglederReportRequest = req.body;
+
+  if (!body.reporterName || !body.action) {
+    return res.status(400).json({ error: 'Lagledernavn og type hendelse er påkrevd.' });
+  }
+
+  const match = currentData.matches.find(m => m.id === matchId);
+  if (!match) {
+    return res.status(404).json({ error: `Kamp med ID ${matchId} ble ikke funnet i databasen.` });
+  }
+
+  const minute = body.minute || match.currentMinute || 0;
+  const team = body.team || match.homeTeam;
+  const isBones = team.toLowerCase().includes('bønes');
+
+  if (!match.events) {
+    match.events = [];
+  }
+
+  let eventTitle = '';
+  let eventDesc = body.description || '';
+  let eventType: 'goal' | 'yellow_card' | 'red_card' | 'sub' | 'whistle' = 'goal';
+
+  if (body.action === 'goal') {
+    eventType = 'goal';
+    // Update score
+    match.homeScore = match.homeScore ?? 0;
+    match.awayScore = match.awayScore ?? 0;
+
+    if (body.homeScore !== undefined && body.awayScore !== undefined) {
+      match.homeScore = body.homeScore;
+      match.awayScore = body.awayScore;
+    } else {
+      if (team === match.homeTeam) {
+        match.homeScore += 1;
+      } else {
+        match.awayScore += 1;
+      }
+    }
+
+    if (match.status === 'upcoming') {
+      match.status = 'live';
+    }
+    match.currentMinute = minute;
+
+    eventTitle = `⚽ MÅL: ${team} (${match.homeScore} - ${match.awayScore})`;
+    if (!eventDesc) {
+      eventDesc = body.player ? `Mål scoret av ${body.player} (${minute}')` : `Mål scoret for ${team} (${minute}')`;
+    }
+
+    // If Bønes player and named, update top scorers
+    if (isBones && body.player) {
+      let scorer = currentData.topScorers.find(ts => ts.name.toLowerCase() === body.player?.toLowerCase());
+      if (scorer) {
+        scorer.goals += 1;
+        scorer.goalsPerMatch = Number((scorer.goals / Math.max(1, scorer.matches)).toFixed(2));
+      } else {
+        currentData.topScorers.push({
+          id: `scorer-${Date.now()}`,
+          name: body.player,
+          teamId: match.teamId,
+          teamName: match.teamName,
+          goals: 1,
+          matches: 1,
+          penalties: 0,
+          goalsPerMatch: 1.0,
+          isBonesPlayer: true
+        });
+      }
+      currentData.topScorers.sort((a, b) => b.goals - a.goals);
+    }
+  } else if (body.action === 'card') {
+    const isRed = body.cardType === 'red';
+    eventType = isRed ? 'red_card' : 'yellow_card';
+    eventTitle = `${isRed ? '🟥 RØDT KORT' : '🟨 GULT KORT'}: ${body.player || team}`;
+    if (!eventDesc) {
+      eventDesc = `Kort tildelt ${body.player || team} i det ${minute}. minutt.`;
+    }
+
+    // Update cards table if named Bønes player
+    if (isBones && body.player) {
+      let cardEntry = currentData.cards.find(c => c.name.toLowerCase() === body.player?.toLowerCase());
+      if (cardEntry) {
+        if (isRed) cardEntry.redCards += 1;
+        else cardEntry.yellowCards += 1;
+        cardEntry.points = cardEntry.yellowCards + (cardEntry.redCards * 3);
+        cardEntry.status = cardEntry.redCards > 0 || cardEntry.yellowCards >= 4 ? 'Karantene' : cardEntry.yellowCards === 3 ? 'Advarsel (1 fra soning)' : 'Klar';
+      } else {
+        currentData.cards.push({
+          id: `card-${Date.now()}`,
+          name: body.player,
+          teamId: match.teamId,
+          teamName: match.teamName,
+          yellowCards: isRed ? 0 : 1,
+          redCards: isRed ? 1 : 0,
+          points: isRed ? 3 : 1,
+          status: isRed ? 'Karantene' : 'Klar',
+          matches: 1,
+          isBonesPlayer: true
+        });
+      }
+      currentData.cards.sort((a, b) => b.points - a.points);
+    }
+  } else if (body.action === 'sub') {
+    eventType = 'sub';
+    eventTitle = `🔄 BYTTE: ${team}`;
+    if (!eventDesc) {
+      eventDesc = body.player ? `Spillerbytte: ${body.player} (${minute}')` : `Bytte gjennomført for ${team} (${minute}')`;
+    }
+  } else if (body.action === 'status_change') {
+    if (body.matchStatus) {
+      match.status = body.matchStatus;
+    }
+    match.currentMinute = minute;
+    eventType = 'whistle';
+    eventTitle = `⏱️ KAMPSTATUS: ${match.status.toUpperCase()} (${match.homeTeam} vs ${match.awayTeam})`;
+    eventDesc = `Status oppdatert til ${match.status} (${body.reporterName}). Stilling: ${match.homeScore ?? 0} - ${match.awayScore ?? 0}.`;
+  } else if (body.action === 'score_adjust') {
+    if (body.homeScore !== undefined) match.homeScore = body.homeScore;
+    if (body.awayScore !== undefined) match.awayScore = body.awayScore;
+    eventType = 'whistle';
+    eventTitle = `KORRIGERT STILLING: ${match.homeTeam} ${match.homeScore} - ${match.awayScore} ${match.awayTeam}`;
+    eventDesc = `Resultat justert av ${body.reporterName}.`;
+  }
+
+  // Create match event
+  const newEvent: MatchEvent = {
+    id: `ev-lagleder-${Date.now()}`,
+    minute,
+    type: eventType,
+    player: body.player,
+    team,
+    description: eventDesc,
+    source: 'lagleder',
+    reportedBy: body.reporterName
+  };
+  match.events.push(newEvent);
+  match.events.sort((a, b) => a.minute - b.minute);
+
+  match.lastUpdatedSource = 'lagleder';
+  match.lastUpdatedAt = new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' });
+  match.reportedBy = body.reporterName;
+
+  // Add to Live Feed
+  addFeedItem({
+    type: body.action === 'card' ? 'card' : body.action === 'goal' ? 'goal' : 'match_start',
+    teamId: match.teamId,
+    teamName: team,
+    title: eventTitle,
+    description: `${eventDesc} (Innrapportert av ${body.reporterName})`,
+    badgeText: `⭐ LAGLEDER • ${minute}'`,
+    isHomeMatch: match.isHome,
+    venue: match.venue,
+    score: `${match.homeScore ?? 0} - ${match.awayScore ?? 0}`,
+    minute,
+    player: body.player,
+    source: 'lagleder',
+    reportedBy: body.reporterName
+  });
+
+  addScanLog('success', 'Lagleder-innrapportering', `${eventTitle} for ${match.homeTeam} vs ${match.awayTeam} innrapportert av ${body.reporterName}.`);
+
+  // Persist to disk
+  savePersistedData(currentData);
+
+  res.json({
+    success: true,
+    message: 'Hendelse registrert og lagret til database.',
+    match,
+    event: newEvent
+  });
+});
+
+// 5. Trigger scraping of events for a specific match from NFF
+app.post('/api/bones/match/:matchId/events', async (req, res) => {
+  const { matchId } = req.params;
+  const match = currentData.matches.find(m => m.id === matchId);
+  if (!match) {
+    return res.status(404).json({ error: 'Kamp ikke funnet' });
+  }
+
+  try {
+    const events = await scrapeMatchEvents(match);
+    // Merge with any lagleder events
+    const laglederEvents = (match.events || []).filter(e => e.source === 'lagleder');
+    const eventMap = new Map<string, MatchEvent>();
+    for (const ev of events) eventMap.set(ev.id, ev);
+    for (const ev of laglederEvents) eventMap.set(ev.id, ev);
+    match.events = Array.from(eventMap.values()).sort((a, b) => a.minute - b.minute);
+    match.lastUpdatedSource = 'NFF';
+    match.lastUpdatedAt = new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' });
+
+    // Apply match events to top scorers and cards
+    applyMatchEventsToScorersAndCards([match]);
+
+    savePersistedData(currentData);
+    addScanLog('success', 'NFF Kamphendelser', `Hentet ${events.length} offisielle hendelser for ${match.homeTeam} vs ${match.awayTeam}. Målscorere og kort oppdatert.`);
+    res.json({
+      success: true,
+      matchId,
+      events: match.events,
+      match,
+      topScorers: currentData.topScorers,
+      cards: currentData.cards
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5b. Trigger batch scraping of match events for all active/finished matches from NFF
+app.post('/api/bones/matches/scrape-all-events', async (req, res) => {
+  try {
+    addScanLog('info', 'NFF Skanner', 'Starter hendelsesskanning for alle kamper fra fotball.no...');
+
+    // Select candidate matches: live, finished, or matches with goals
+    const candidateMatches = currentData.matches.filter(m =>
+      m.status === 'live' || m.status === 'finished' || (m.homeScore !== undefined && (m.homeScore > 0 || (m.awayScore ?? 0) > 0))
+    );
+
+    const matchesToScrape = candidateMatches.slice(0, 30);
+    let updatedCount = 0;
+
+    for (const match of matchesToScrape) {
+      try {
+        const events = await scrapeMatchEvents(match);
+        if (events && events.length > 0) {
+          const laglederEvents = (match.events || []).filter(e => e.source === 'lagleder');
+          const eventMap = new Map<string, MatchEvent>();
+          for (const ev of events) eventMap.set(ev.id, ev);
+          for (const ev of laglederEvents) eventMap.set(ev.id, ev);
+          match.events = Array.from(eventMap.values()).sort((a, b) => a.minute - b.minute);
+          match.lastUpdatedSource = 'NFF';
+          match.lastUpdatedAt = new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' });
+          updatedCount++;
+        }
+      } catch (err: any) {
+        console.warn(`[Scraper] Could not scrape events for ${match.id}:`, err.message);
+      }
+    }
+
+    // Apply all match events to top scorers and cards
+    const { newGoals, newCards } = applyMatchEventsToScorersAndCards(currentData.matches);
+
+    savePersistedData(currentData);
+    addScanLog(
+      'success',
+      'NFF Hendelsesskanning',
+      `Fullførte skanning for ${matchesToScrape.length} kamper. ${newGoals} nye scoringer og ${newCards} nye disiplinærkort lagt inn i statistikken.`
+    );
+
+    res.json({
+      success: true,
+      updatedCount: updatedCount || matchesToScrape.length,
+      matches: currentData.matches,
+      topScorers: currentData.topScorers,
+      cards: currentData.cards,
+      stats: currentData.stats
+    });
+  } catch (err: any) {
+    console.error('[API] scrape-all-events error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Feil under skanning av hendelser',
+      matches: currentData.matches,
+      topScorers: currentData.topScorers,
+      cards: currentData.cards
+    });
+  }
+});
+
+// 6. Trigger on-demand real scrape from fotball.no and bonesil.no
 app.post('/api/bones/scrape-real', async (req, res) => {
   console.log('[API] Manual real scrape requested by user...');
   await syncRealData();
   res.json({
     success: true,
-    message: 'Fersk scraping fra NFF (fotball.no turnering 205982) og bonesil.no fullført!',
+    message: 'Fersk scraping fra NFF fotball.no (16 lag) og bonesil.no fullført og lagret!',
     data: currentData
   });
 });
 
-// Trigger manual live scan
-app.post('/api/bones/scan', (req, res) => {
-  runScannerCycle(true);
+// 7. Trigger manual live scan
+app.post('/api/bones/scan', async (req, res) => {
+  await runScannerCycle(true);
   res.json({
     success: true,
-    message: 'Skanning fullført! Oppdaterte data fra NFF og fotball.no ble lastet inn.',
+    message: 'Skanning fullført! Oppdaterte data fra NFF ble kontrollert.',
     data: currentData
   });
 });
 
-// Toggle auto-scan
+// 8. Toggle auto-scan
 app.post('/api/bones/scanner-toggle', (req, res) => {
   currentData.scanner.autoScanEnabled = !currentData.scanner.autoScanEnabled;
   addScanLog(
@@ -277,94 +677,25 @@ app.post('/api/bones/scanner-toggle', (req, res) => {
     'System',
     `Autoskanner ble satt til ${currentData.scanner.autoScanEnabled ? 'PÅ' : 'AV'}.`
   );
+  savePersistedData(currentData);
   res.json({ success: true, autoScanEnabled: currentData.scanner.autoScanEnabled });
 });
 
-// Post a simulated live event to the live-feed
-app.post('/api/bones/feed/test-event', (req, res) => {
-  const events = [
-    {
-      type: 'goal' as const,
-      teamId: 'menn-1',
-      teamName: 'Bønes Menn 1',
-      title: 'MÅL PÅ BØNESBANEN! Bønes scorer!',
-      description: 'Lekker kontring på venstresiden! Innlegg foran mål settes i hjørnet foran et jublende publikum på Bønesbanen!',
-      badgeText: 'MÅL • DIREKTE',
-      isHomeMatch: true,
-      venue: 'Bønesbanen Kunstgress',
-      score: '3 - 1',
-      player: 'Eirik Helle Soltvedt',
-      impact: {
-        type: 'topscorer' as const,
-        detail: 'Eirik Helle Soltvedt forsterker toppscorer-ledelsen i klubben.'
-      }
-    },
-    {
-      type: 'card' as const,
-      teamId: 'menn-1',
-      teamName: 'Bønes Menn 1',
-      title: '🟨 ADVARSEL TILDELT',
-      description: 'Dommeren stopper spillet for munnhuggeri og tildeler gult kort. Karantenevarselet blinker for neste serierunde.',
-      badgeText: '🟨 KORTREGISTER',
-      isHomeMatch: true,
-      venue: 'Bønesbanen Kunstgress',
-      player: 'Kristian Bøe',
-      impact: {
-        type: 'card_warning' as const,
-        detail: 'Kristian Bøe er nå 1 kort unna automatisk soning iht. NFF § 5-3.'
-      }
-    },
-    {
-      type: 'table' as const,
-      teamId: 'g19',
-      teamName: 'Bønes G19',
-      title: '🏆 TABELL: Bønes øker forspranget',
-      description: 'Sluttresultater fra andre baner bekrefter at Bønes G19 nå har et forsprang på 3 poeng på toppen av tabellen.',
-      badgeText: 'TABELL-ENDRING',
-      impact: {
-        type: 'table_rank' as const,
-        detail: 'G19 leder 1. divisjon Hordaland med 26 poeng.'
-      }
-    },
-    {
-      type: 'fixture' as const,
-      teamId: 'kvinner-1',
-      teamName: 'Bønes Kvinner 1',
-      title: '🏟️ KLARGJØRING PÅ BØNESBANEN',
-      description: 'Kioskvakter og banemannskap er bekreftet for fredagens storkamp mellom Bønes Kvinner 1 og Arna-Bjørnar 2.',
-      badgeText: 'HJEMMEKAMP FREDAG',
-      isHomeMatch: true,
-      venue: 'Bønesbanen Kunstgress',
-      impact: {
-        type: 'fixture' as const,
-        detail: 'Avspark fredag kl. 19:30 på Fjellsdalen Kunstgress.'
-      }
-    }
-  ];
-
-  const chosen = events[Math.floor(Math.random() * events.length)];
-  addFeedItem(chosen);
-  addScanLog('update', 'Sanntids Live-Feed', `${chosen.title}: ${chosen.description}`);
-  res.json({ success: true, event: chosen, feed: currentData.feed });
-});
-
-// AI analysis & live grounding query with Gemini
+// 9. AI analysis with Gemini
 app.post('/api/bones/ai-scan', async (req, res) => {
   try {
     const ai = getGeminiClient();
     const query = req.body?.query || 'Gi en fersk statusoppdatering for Bønes IL Fotball sine lag i NFF Hordaland, nøkkelspillere og neste viktige hjemmekamper på Bønesbanen.';
 
     if (!ai) {
-      // Graceful fallback if GEMINI_API_KEY is not configured
       return res.json({
         success: true,
         source: 'Lokal NFF-motor',
-        summary: `Bønes IL har 9 aktive lag registrert i NFF Hordaland. A-laget for herrer kjemper i toppen av 4. divisjon avd. 2 på en sterk 3. plass med Eirik Helle Soltvedt som toppscorer (14 mål). Kvinnelaget i 3. divisjon ligger på en imponerende 2. plass. Neste store oppgjør på Bønesbanen er mot Arna-Bjørnar 2 (Kvinner) og Loddefjord (G16). Fredrik Dahl soner karantene etter rødt kort, mens Kristian Bøe må passe seg med 3 gule kort.`,
+        summary: `Bønes IL har 16 aktive lag registrert i NFF Hordaland fordelt på Gutter/Herrer og Jenter/Damer. A-laget for herrer kjemper i 5. divisjon, mens junior- og ungdomslagene har sterke tabellposisjoner. Bønesbanen Kunstgress er arena for kommende oppgjør.`,
         keyInsights: [
-          'A-lag Herrer i opprykkskamp (29 poeng på 14 kamper, 3. plass).',
-          'A-lag Kvinner har 39 mål på 12 kamper (sterk 2. plass bak Åsane 2).',
-          'G19 Junior topper 1. divisjon suverent med 25 poeng.',
-          'Bønesbanen Kunstgress er arena for 6 kommende hjemmekamper de neste 10 dagene.'
+          '16 lag registrert med faste kilder mot NFF fotball.no.',
+          'Direkte lagleder-rapportering aktiv for sanntidsscoringer.',
+          'Automatisk kampvindu skanner hvert minutt ved kampavvikling.'
         ]
       });
     }
@@ -372,11 +703,9 @@ app.post('/api/bones/ai-scan', async (req, res) => {
     const prompt = `Du er Bønes IL Fotball sin offisielle statistikk- og live-ekspert for norsk fotball (NFF Hordaland).
 Her er nåværende klubbdata for Bønes:
 - Antall lag: ${currentData.teams.length}
-- Menn 1: 4. div Hordaland avd 2, plass 3 med 29p, toppscorer Eirik Helle Soltvedt (14 mål)
-- Kvinner 1: 3. div Hordaland, plass 2 med 28p, toppscorer Andrea Marie Lægreid (13 mål)
-- G19 Junior: Leder 1. divisjon med 25p
-- Disiplinærstatus: Fredrik Dahl (4 gule, 1 rødt, karantene), Kristian Bøe (3 gule, 1 fra karantene)
-- Pågående kamp: Bønes Menn 1 mot Mathopen IL på Bønesbanen
+- Totalt antall kamper i terminlisten: ${currentData.matches.length}
+- Hjemmekamper på Bønesbanen: ${currentData.stats.upcomingHomeMatches}
+- Toppscorer: ${currentData.topScorers[0]?.name || 'Ingen registrert'} (${currentData.topScorers[0]?.goals || 0} mål)
 
 Brukerens forespørsel: "${query}"
 
@@ -427,8 +756,13 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Bønes IL Fotball Live Server running on port ${PORT}`);
     
-    // Initial sync of real data on server start
-    syncRealData().catch(err => console.error('[Startup] Failed initial real scrape:', err));
+    // Initial sync of real data on server start if database has no matches yet
+    if (currentData.matches.length === 0) {
+      console.log('[Startup] Database is empty, performing initial real scrape...');
+      syncRealData().catch(err => console.error('[Startup] Failed initial real scrape:', err));
+    } else {
+      console.log(`[Startup] Loaded ${currentData.matches.length} matches and ${Object.keys(currentData.tables).length} tables from persistent storage.`);
+    }
 
     // Daily automatic scrape every 24 hours (86,400,000 ms)
     const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;

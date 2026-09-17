@@ -1,17 +1,19 @@
 import React, { useState } from 'react';
 import { TopScorer, TeamInfo } from '../types.js';
-import { Flame, Award, Crosshair, Target, ChevronDown } from 'lucide-react';
+import { Flame, Award, Crosshair, Target, ChevronDown, User, TrendingUp, Sparkles } from 'lucide-react';
 
 interface TopScorersViewProps {
   topScorers: TopScorer[];
   teams: TeamInfo[];
   selectedTeamId: string;
+  onSelectPlayer?: (playerName: string, teamId?: string) => void;
 }
 
 export const TopScorersView: React.FC<TopScorersViewProps> = ({
   topScorers,
   teams,
-  selectedTeamId
+  selectedTeamId,
+  onSelectPlayer
 }) => {
   const [localTeamFilter, setLocalTeamFilter] = useState<string>(selectedTeamId);
 
@@ -22,11 +24,22 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
     .filter((s) => activeTeamFilter === 'all' || s.teamId === activeTeamFilter)
     .sort((a, b) => b.goals - a.goals);
 
-  const clubTopScorer = topScorers[0];
-
   return (
     <div id="topscorers-view-container" className="space-y-4">
       
+      {/* Informative helper note */}
+      <div className="bg-gradient-to-r from-blue-50 via-slate-50 to-amber-50 border border-blue-200/80 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-slate-700 shadow-2xs">
+        <div className="flex items-center space-x-2">
+          <Sparkles className="w-4 h-4 text-[#165094] shrink-0" />
+          <span>
+            <strong>Klikkbare spillere:</strong> Trykk på et spillernavn nedenfor for å åpne spillerens detaljerte sesonghistorikk, inkludert formkurve og totalt spilte kamper i vår- og høstsesongen.
+          </span>
+        </div>
+        <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-blue-100 text-blue-900 border border-blue-200">
+          NFF Hordaland 2026
+        </span>
+      </div>
+
       {/* Top 3 Featured Podiums (if viewing all or enough scorers) */}
       {filteredScorers.length >= 3 && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -36,11 +49,20 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
               <div
                 key={scorer.id}
                 id={`scorer-podium-${scorer.id}`}
-                className={`p-4 rounded-xl border relative overflow-hidden flex flex-col justify-between ${
+                onClick={() => onSelectPlayer?.(scorer.name, scorer.teamId)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    onSelectPlayer?.(scorer.name, scorer.teamId);
+                  }
+                }}
+                className={`p-4 rounded-xl border relative overflow-hidden flex flex-col justify-between cursor-pointer transition-all hover:scale-[1.01] hover:shadow-md ${
                   isLeader
                     ? 'bg-gradient-to-br from-amber-500/10 via-amber-100/30 to-white border-amber-300 ring-2 ring-amber-400/40 shadow-sm'
-                    : 'bg-white border-slate-200 shadow-xs'
+                    : 'bg-white border-slate-200 shadow-xs hover:border-blue-300'
                 }`}
+                title={`Klikk for å se sesonghistorikk og formkurve for ${scorer.name}`}
               >
                 {/* Badge */}
                 <div className="flex items-center justify-between">
@@ -63,12 +85,15 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
                 </div>
 
                 <div className="my-3">
-                  <h4 className="font-extrabold text-slate-900 text-base leading-tight">
-                    {scorer.name}
-                  </h4>
-                  <p className="text-xs text-slate-500 mt-0.5 flex items-center space-x-1">
+                  <div className="flex items-center space-x-1.5 group">
+                    <h4 className="font-extrabold text-slate-900 text-base leading-tight group-hover:text-[#165094] group-hover:underline">
+                      {scorer.name}
+                    </h4>
+                    <TrendingUp className="w-3.5 h-3.5 text-blue-600 opacity-70 group-hover:opacity-100" />
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1 flex items-center space-x-1">
                     <Target className="w-3 h-3 text-red-500" />
-                    <span>{scorer.matches} kamper spilt</span>
+                    <span>{scorer.matches} kamper</span>
                     <span>•</span>
                     <span>{scorer.goalsPerMatch.toFixed(2)} mål/kamp</span>
                   </p>
@@ -76,7 +101,10 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
 
                 {/* Big Goal Display */}
                 <div className="flex items-baseline justify-between pt-2 border-t border-slate-100">
-                  <span className="text-xs text-slate-500">Mål totalt:</span>
+                  <span className="text-xs text-blue-800 font-semibold group-hover:underline flex items-center space-x-1">
+                    <span>Se spillerhistorikk & form</span>
+                    <span>→</span>
+                  </span>
                   <div className="flex items-baseline space-x-1">
                     <span className="text-2xl sm:text-3xl font-mono font-black text-red-700">
                       {scorer.goals}
@@ -103,7 +131,7 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
               </h3>
             </div>
             <p className="text-xs text-slate-300 mt-0.5">
-              Registrerte mål i offisielle NFF-kamper for alle avdelinger
+              Registrerte mål i offisielle NFF-kamper for alle 16 avdelinger (Høstsesongen 2026)
             </p>
           </div>
 
@@ -133,7 +161,7 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
             <thead className="bg-slate-100 text-slate-600 uppercase text-[11px] font-bold tracking-wider border-b border-slate-200">
               <tr>
                 <th scope="col" className="py-3 px-4 text-center w-12">#</th>
-                <th scope="col" className="py-3 px-4">Spiller</th>
+                <th scope="col" className="py-3 px-4">Spiller (klikk for profil)</th>
                 <th scope="col" className="py-3 px-3">Lag / Avdeling</th>
                 <th scope="col" className="py-3 px-3 text-center">Kamper</th>
                 <th scope="col" className="py-3 px-3 text-center hidden sm:table-cell">Straffer</th>
@@ -148,7 +176,7 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
                 return (
                   <tr
                     key={scorer.id}
-                    className={`hover:bg-slate-50 transition-colors ${
+                    className={`hover:bg-blue-50/40 transition-colors ${
                       isLeader ? 'bg-amber-50/40 font-semibold' : ''
                     }`}
                   >
@@ -169,8 +197,16 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
                     </td>
 
                     <td className="py-3 px-4">
-                      <div className="flex items-center space-x-2">
-                        <span className="font-bold text-slate-900 text-sm">
+                      <button
+                        type="button"
+                        onClick={() => onSelectPlayer?.(scorer.name, scorer.teamId)}
+                        className="flex items-center space-x-2 text-left group hover:opacity-90 transition-opacity focus:outline-hidden"
+                        title={`Vis spillerprofil og formkurve for ${scorer.name}`}
+                      >
+                        <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-900 flex items-center justify-center text-[10px] font-bold font-mono shrink-0 group-hover:bg-[#165094] group-hover:text-white transition-colors">
+                          <User className="w-3.5 h-3.5" />
+                        </div>
+                        <span className="font-bold text-slate-900 text-sm group-hover:text-[#165094] group-hover:underline">
                           {scorer.name}
                         </span>
                         {isLeader && (
@@ -178,7 +214,8 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
                             Gullstøvel
                           </span>
                         )}
-                      </div>
+                        <TrendingUp className="w-3 h-3 text-slate-400 group-hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </button>
                     </td>
 
                     <td className="py-3 px-3">
@@ -216,3 +253,4 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
     </div>
   );
 };
+
