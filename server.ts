@@ -2,9 +2,10 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-import { BonesClubData, ScanLog, MatchEvent, FeedItem, Match, LaglederReportRequest } from './src/types.js';
+import { BonesClubData, ScanLog, MatchEvent, FeedItem, Match, LaglederReportRequest, TopScorer, CardStatistic, MatchStatus } from './src/types.js';
 import { runFullClubScrape, BONES_16_TEAMS, scrapeMatchEvents } from './server/bonesScraper.js';
-import { loadPersistedData, savePersistedData } from './server/storage.js';
+import { loadPersistedData, savePersistedData, upsertMatches, queryMatches } from './server/storage.js';
+import { ALL_BONES_SQUADS, ALL_BONES_PLAYERS, getSquadForTeam, getMatchLineup } from './src/data/bonesSquads.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,14 @@ app.use(express.json());
 
 // Load persistent database from disk (survives container restarts)
 let currentData: BonesClubData = loadPersistedData();
+if (!currentData.players || currentData.players.length === 0) {
+  currentData.players = ALL_BONES_PLAYERS;
+}
+for (const m of currentData.matches) {
+  if (!m.lineup) {
+    m.lineup = getMatchLineup(m.teamId);
+  }
+}
 
 // Function to check if we are currently inside an active match window
 function checkMatchWindow(): { isActive: boolean; activeMatches: Match[]; details: string } {
@@ -52,26 +61,21 @@ function checkMatchWindow(): { isActive: boolean; activeMatches: Match[]; detail
   };
 }
 
-// Function to apply match events (goals and cards) to topScorers and cards
-function applyMatchEventsToScorersAndCards(matches: Match[]): { newGoals: number; newCards: number } {
-  let newGoals = 0;
-  let newCards = 0;
-
-  if (!currentData.processedEventIds) {
-    currentData.processedEventIds = [];
-  }
-  const processedSet = new Set<string>(currentData.processedEventIds);
+// Function to rebuild scorers and cards purely from real match events
+function rebuildScorersAndCardsFromEvents(matches: Match[]): { totalScorers: number; totalCards: number; totalGoals: number } {
+  const scorersMap = new Map<string, TopScorer>();
+  const cardsMap = new Map<string, CardStatistic>();
 
   for (const match of matches) {
     if (!match.events || match.events.length === 0) continue;
 
     for (const ev of match.events) {
-      if (processedSet.has(ev.id)) continue;
-      processedSet.add(ev.id);
-
       if (!ev.player) continue;
       const playerName = ev.player.trim();
       if (!playerName) continue;
+      if (playerName.toLowerCase().includes('personinfo') || playerName.toLowerCase().includes('ikke tilgjengelig')) {
+        continue;
+      }
 
       const isBonesEvent =
         (ev.team && ev.team.toLowerCase().includes('bønes')) ||
@@ -81,37 +85,46 @@ function applyMatchEventsToScorersAndCards(matches: Match[]): { newGoals: number
 
       if (!isBonesEvent) continue;
 
+      const playerKey = playerName.toLowerCase();
+
+      const playerSlug = playerName.toLowerCase().replace(/[^a-z0-9]/gi, '_');
+      const teamSlug = (match.teamId || '').toLowerCase().replace(/[^a-z0-9]/gi, '_');
+
       if (ev.type === 'goal') {
-        let scorer = currentData.topScorers.find(ts => ts.name.toLowerCase() === playerName.toLowerCase());
-        if (scorer) {
-          scorer.goals += 1;
-          scorer.goalsPerMatch = Number((scorer.goals / Math.max(1, scorer.matches)).toFixed(2));
+        const isPenalty = (ev.description || '').toLowerCase().includes('straffe');
+        const existing = scorersMap.get(playerKey);
+        if (existing) {
+          existing.goals += 1;
+          if (isPenalty) existing.penalties += 1;
         } else {
-          scorer = {
-            id: `scorer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          scorersMap.set(playerKey, {
+            id: `ts-${playerSlug}-${teamSlug}`,
             name: playerName,
             teamId: match.teamId,
             teamName: match.teamName,
             goals: 1,
             matches: 1,
-            penalties: 0,
+            penalties: isPenalty ? 1 : 0,
             goalsPerMatch: 1.0,
             isBonesPlayer: true
-          };
-          currentData.topScorers.push(scorer);
+          });
         }
-        newGoals++;
       } else if (ev.type === 'yellow_card' || ev.type === 'red_card') {
         const isRed = ev.type === 'red_card';
-        let cardEntry = currentData.cards.find(c => c.name.toLowerCase() === playerName.toLowerCase());
-        if (cardEntry) {
-          if (isRed) cardEntry.redCards += 1;
-          else cardEntry.yellowCards += 1;
-          cardEntry.points = cardEntry.yellowCards + (cardEntry.redCards * 3);
-          cardEntry.status = cardEntry.redCards > 0 || cardEntry.yellowCards >= 4 ? 'Karantene' : cardEntry.yellowCards === 3 ? 'Advarsel (1 fra soning)' : 'Klar';
+        const existing = cardsMap.get(playerKey);
+        if (existing) {
+          if (isRed) existing.redCards += 1;
+          else existing.yellowCards += 1;
+          existing.points = existing.yellowCards + (existing.redCards * 3);
+          existing.status =
+            existing.redCards > 0 || existing.yellowCards >= 4
+              ? 'Karantene'
+              : existing.yellowCards === 3
+              ? 'Advarsel (1 fra soning)'
+              : 'Klar';
         } else {
-          cardEntry = {
-            id: `card-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          cardsMap.set(playerKey, {
+            id: `card-${playerSlug}-${teamSlug}`,
             name: playerName,
             teamId: match.teamId,
             teamName: match.teamName,
@@ -121,20 +134,51 @@ function applyMatchEventsToScorersAndCards(matches: Match[]): { newGoals: number
             status: isRed ? 'Karantene' : 'Klar',
             matches: 1,
             isBonesPlayer: true
-          };
-          currentData.cards.push(cardEntry);
+          });
         }
-        newCards++;
       }
     }
   }
 
-  currentData.processedEventIds = Array.from(processedSet);
-  currentData.topScorers.sort((a, b) => b.goals - a.goals);
-  currentData.cards.sort((a, b) => b.points - a.points);
-  currentData.stats.totalGoalsScored = currentData.topScorers.reduce((acc, curr) => acc + curr.goals, 0);
+  // Calculate actual match counts
+  for (const s of scorersMap.values()) {
+    const count = matches.filter(m => m.events?.some(e => e.player?.toLowerCase() === s.name.toLowerCase())).length;
+    s.matches = Math.max(1, count);
+    s.goalsPerMatch = Number((s.goals / s.matches).toFixed(2));
+  }
+  for (const c of cardsMap.values()) {
+    const count = matches.filter(m => m.events?.some(e => e.player?.toLowerCase() === c.name.toLowerCase())).length;
+    c.matches = Math.max(1, count);
+  }
 
-  return { newGoals, newCards };
+  const realScorers = Array.from(scorersMap.values()).sort((a, b) => b.goals - a.goals);
+  const realCards = Array.from(cardsMap.values()).sort((a, b) => b.points - a.points);
+
+  currentData.topScorers = realScorers;
+  currentData.cards = realCards;
+  currentData.stats.totalGoalsScored = realScorers.reduce((acc, curr) => acc + curr.goals, 0);
+
+  return {
+    totalScorers: realScorers.length,
+    totalCards: realCards.length,
+    totalGoals: currentData.stats.totalGoalsScored
+  };
+}
+
+// Function to apply match events (goals and cards) to topScorers and cards
+function applyMatchEventsToScorersAndCards(matches: Match[]): { newGoals: number; newCards: number } {
+  const prevScorersCount = currentData.topScorers.length;
+  const prevCardsCount = currentData.cards.length;
+  const res = rebuildScorersAndCardsFromEvents(currentData.matches);
+  return {
+    newGoals: Math.max(0, res.totalScorers - prevScorersCount),
+    newCards: Math.max(0, res.totalCards - prevCardsCount)
+  };
+}
+
+// Ensure topScorers and cards are immediately derived from genuine match events on boot
+if (currentData.matches && currentData.matches.some(m => m.events && m.events.length > 0)) {
+  rebuildScorersAndCardsFromEvents(currentData.matches);
 }
 
 // Function to synchronize real data from NFF & bonesil.no
@@ -343,6 +387,155 @@ setInterval(async () => {
 // 1. Full data retrieval
 app.get('/api/bones/data', (req, res) => {
   res.json(currentData);
+});
+
+// 1b. Dedicated filtered matches endpoint
+app.get('/api/bones/matches', (req, res) => {
+  const { status, category, teamId, date, limit } = req.query;
+  const filtered = queryMatches(currentData, {
+    status: (status as any) || 'all',
+    category: typeof category === 'string' ? category : undefined,
+    teamId: typeof teamId === 'string' ? teamId : undefined,
+    date: typeof date === 'string' ? date : undefined,
+    limit: limit ? parseInt(limit as string, 10) : undefined
+  });
+
+  res.json({
+    success: true,
+    count: filtered.length,
+    matches: filtered
+  });
+});
+
+// 1c. Matches today endpoint (sorted Live > Upcoming > Finished)
+app.get('/api/bones/matches/today', (req, res) => {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const matchesToday = currentData.matches.filter(m => m.date === todayStr);
+
+  // Sort order: live (0) > upcoming (1) > finished (2), then by time
+  const statusPriority: Record<string, number> = { live: 0, upcoming: 1, finished: 2 };
+  matchesToday.sort((a, b) => {
+    const pA = statusPriority[a.status] ?? 3;
+    const pB = statusPriority[b.status] ?? 3;
+    if (pA !== pB) return pA - pB;
+    return a.time.localeCompare(b.time);
+  });
+
+  res.json({
+    success: true,
+    date: todayStr,
+    count: matchesToday.length,
+    matches: matchesToday
+  });
+});
+
+// 1d. Live matches endpoint
+app.get('/api/bones/matches/live', (req, res) => {
+  const liveMatches = currentData.matches.filter(m => m.status === 'live');
+  res.json({
+    success: true,
+    count: liveMatches.length,
+    matches: liveMatches
+  });
+});
+
+// 1e. Single match details endpoint
+app.get('/api/bones/match/:id', (req, res) => {
+  const match = currentData.matches.find(m => m.id === req.params.id);
+  if (!match) {
+    return res.status(404).json({ success: false, error: 'Kamp ble ikke funnet' });
+  }
+  res.json({
+    success: true,
+    match
+  });
+});
+
+// 1f. Squads and player rosters endpoints
+app.get('/api/bones/squads', (req, res) => {
+  res.json({
+    success: true,
+    count: ALL_BONES_SQUADS.length,
+    squads: ALL_BONES_SQUADS
+  });
+});
+
+app.get('/api/bones/squads/:teamId', (req, res) => {
+  const squad = getSquadForTeam(req.params.teamId);
+  if (!squad) {
+    return res.status(404).json({ success: false, error: 'Lag ble ikke funnet' });
+  }
+  res.json({
+    success: true,
+    squad
+  });
+});
+
+app.post('/api/bones/squads/sync', async (req, res) => {
+  try {
+    const { fetchNffSquads } = await import('./server/scrapeNffSquads.js');
+    const updatedSquads = await fetchNffSquads();
+    currentData.players = updatedSquads.flatMap(s => s.players);
+    savePersistedData(currentData);
+    res.json({
+      success: true,
+      message: `Synkroniserte ${updatedSquads.length} lag og ${currentData.players.length} ekte spillere direkte fra NFF fotball.no`,
+      count: updatedSquads.length,
+      playerCount: currentData.players.length,
+      squads: updatedSquads
+    });
+  } catch (err: any) {
+    console.error('Error in squads sync endpoint:', err);
+    res.status(500).json({ success: false, error: err.message || 'Kunne ikke synkronisere tropper fra NFF' });
+  }
+});
+
+app.get('/api/bones/players', (req, res) => {
+  const { teamId, position, search } = req.query;
+  let players = currentData.players || ALL_BONES_PLAYERS;
+  if (typeof teamId === 'string' && teamId !== 'all') {
+    players = players.filter(p => p.teamId === teamId);
+  }
+  if (typeof position === 'string' && position !== 'all') {
+    players = players.filter(p => p.position.toLowerCase() === (position as string).toLowerCase());
+  }
+  if (typeof search === 'string' && search.trim()) {
+    const q = search.toLowerCase();
+    players = players.filter(p => p.name.toLowerCase().includes(q) || p.teamName.toLowerCase().includes(q));
+  }
+  res.json({
+    success: true,
+    count: players.length,
+    players
+  });
+});
+
+app.get('/api/bones/players/:idOrName', (req, res) => {
+  const param = decodeURIComponent(req.params.idOrName).toLowerCase();
+  const players = currentData.players || ALL_BONES_PLAYERS;
+  const player = players.find(p => p.id.toLowerCase() === param || p.name.toLowerCase() === param);
+  if (!player) {
+    return res.status(404).json({ success: false, error: 'Spiller ble ikke funnet' });
+  }
+  res.json({
+    success: true,
+    player
+  });
+});
+
+app.get('/api/bones/matches/:id/lineup', (req, res) => {
+  const match = currentData.matches.find(m => m.id === req.params.id);
+  if (!match) {
+    return res.status(404).json({ success: false, error: 'Kamp ble ikke funnet' });
+  }
+  const lineup = match.lineup || getMatchLineup(match.teamId);
+  res.json({
+    success: true,
+    matchId: match.id,
+    matchTitle: `${match.homeTeam} - ${match.awayTeam}`,
+    teamName: match.teamName,
+    lineup
+  });
 });
 
 // 2. Lightweight check for version & match window
@@ -597,35 +790,40 @@ app.post('/api/bones/matches/scrape-all-events', async (req, res) => {
       m.status === 'live' || m.status === 'finished' || (m.homeScore !== undefined && (m.homeScore > 0 || (m.awayScore ?? 0) > 0))
     );
 
-    const matchesToScrape = candidateMatches.slice(0, 30);
+    const matchesToScrape = candidateMatches.slice(0, 50);
     let updatedCount = 0;
 
-    for (const match of matchesToScrape) {
-      try {
-        const events = await scrapeMatchEvents(match);
-        if (events && events.length > 0) {
-          const laglederEvents = (match.events || []).filter(e => e.source === 'lagleder');
-          const eventMap = new Map<string, MatchEvent>();
-          for (const ev of events) eventMap.set(ev.id, ev);
-          for (const ev of laglederEvents) eventMap.set(ev.id, ev);
-          match.events = Array.from(eventMap.values()).sort((a, b) => a.minute - b.minute);
-          match.lastUpdatedSource = 'NFF';
-          match.lastUpdatedAt = new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' });
-          updatedCount++;
+    // Process in parallel batches of 5
+    const batchSize = 5;
+    for (let i = 0; i < matchesToScrape.length; i += batchSize) {
+      const batch = matchesToScrape.slice(i, i + batchSize);
+      await Promise.all(batch.map(async (match) => {
+        try {
+          const events = await scrapeMatchEvents(match);
+          if (events && events.length > 0) {
+            const laglederEvents = (match.events || []).filter(e => e.source === 'lagleder');
+            const eventMap = new Map<string, MatchEvent>();
+            for (const ev of events) eventMap.set(ev.id, ev);
+            for (const ev of laglederEvents) eventMap.set(ev.id, ev);
+            match.events = Array.from(eventMap.values()).sort((a, b) => a.minute - b.minute);
+            match.lastUpdatedSource = 'NFF';
+            match.lastUpdatedAt = new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' });
+            updatedCount++;
+          }
+        } catch (err: any) {
+          console.warn(`[Scraper] Could not scrape events for ${match.id}:`, err.message);
         }
-      } catch (err: any) {
-        console.warn(`[Scraper] Could not scrape events for ${match.id}:`, err.message);
-      }
+      }));
     }
 
-    // Apply all match events to top scorers and cards
-    const { newGoals, newCards } = applyMatchEventsToScorersAndCards(currentData.matches);
+    // Completely rebuild real scorers and cards from events
+    const statsResult = rebuildScorersAndCardsFromEvents(currentData.matches);
 
     savePersistedData(currentData);
     addScanLog(
       'success',
       'NFF Hendelsesskanning',
-      `Fullførte skanning for ${matchesToScrape.length} kamper. ${newGoals} nye scoringer og ${newCards} nye disiplinærkort lagt inn i statistikken.`
+      `Fullførte skanning for ${matchesToScrape.length} kamper. ${statsResult.totalScorers} ekte Bønes-målscorere og ${statsResult.totalCards} spillere med disiplinærkort oppdatert.`
     );
 
     res.json({
@@ -645,6 +843,29 @@ app.post('/api/bones/matches/scrape-all-events', async (req, res) => {
       topScorers: currentData.topScorers,
       cards: currentData.cards
     });
+  }
+});
+
+// 5c. Rebuild and sync real players directly from match events
+app.post('/api/bones/sync-real-players', (req, res) => {
+  try {
+    const result = rebuildScorersAndCardsFromEvents(currentData.matches);
+    savePersistedData(currentData);
+    addScanLog(
+      'success',
+      'Ekte Spillere Synkronisering',
+      `Synkroniserte ${result.totalScorers} ekte Bønes-målscorere (${result.totalGoals} mål) og ${result.totalCards} kortspillere fra kamphendelser.`
+    );
+    res.json({
+      success: true,
+      topScorers: currentData.topScorers,
+      cards: currentData.cards,
+      stats: currentData.stats,
+      totalScorers: result.totalScorers,
+      totalCards: result.totalCards
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

@@ -1,15 +1,24 @@
 import React, { useState } from 'react';
 import { CardStatistic, TeamInfo } from '../types.js';
-import { AlertTriangle, ShieldAlert, CheckCircle, Scale, AlertOctagon, User, TrendingUp, Sparkles } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, CheckCircle, Scale, AlertOctagon, User, TrendingUp, Sparkles, RefreshCw, CheckCircle2 } from 'lucide-react';
 
 interface CardsViewProps {
   cards: CardStatistic[];
   teams: TeamInfo[];
   selectedTeamId: string;
   onSelectPlayer?: (playerName: string, teamId?: string) => void;
+  onSyncRealData?: () => void;
+  isSyncing?: boolean;
 }
 
-export const CardsView: React.FC<CardsViewProps> = ({ cards, teams, selectedTeamId, onSelectPlayer }) => {
+export const CardsView: React.FC<CardsViewProps> = ({
+  cards,
+  teams,
+  selectedTeamId,
+  onSelectPlayer,
+  onSyncRealData,
+  isSyncing
+}) => {
   const [localTeamFilter, setLocalTeamFilter] = useState<string>(selectedTeamId);
 
   const activeTeamFilter = selectedTeamId !== 'all' ? selectedTeamId : localTeamFilter;
@@ -26,17 +35,36 @@ export const CardsView: React.FC<CardsViewProps> = ({ cards, teams, selectedTeam
   return (
     <div id="cards-view-container" className="space-y-4">
       
-      {/* Informative helper note */}
-      <div className="bg-gradient-to-r from-amber-50 via-slate-50 to-blue-50 border border-amber-200/80 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-slate-700 shadow-2xs">
-        <div className="flex items-center space-x-2">
-          <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
-          <span>
-            <strong>Klikkbare spillere:</strong> Trykk på et spillernavn for å se spillerens detaljerte sesongstatistikk, inkludert formkurve og totalt antall spilte kamper i både vår- og høstsesongen.
-          </span>
+      {/* Real NFF sync & info banner */}
+      <div className="bg-gradient-to-r from-amber-50 via-slate-50 to-blue-50 border border-amber-200/80 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-700 shadow-2xs">
+        <div className="flex items-start sm:items-center space-x-2.5">
+          <div className="w-7 h-7 rounded-lg bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+            <CheckCircle2 className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="flex items-center space-x-2">
+              <strong className="text-slate-900 font-extrabold text-sm">Offisielt NFF Disiplinærregister</strong>
+              <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-mono font-bold text-[10px]">
+                {cards.length} spillere med kort
+              </span>
+            </div>
+            <p className="text-slate-600 text-[11px] mt-0.5">
+              Karantener og advarsler beregnet fra faktiske gule og røde kort i NFF fotball.no kamphendelser.
+            </p>
+          </div>
         </div>
-        <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-200">
-          Disiplinærregister 2026
-        </span>
+
+        {onSyncRealData && (
+          <button
+            id="sync-real-cards-btn"
+            onClick={onSyncRealData}
+            disabled={isSyncing}
+            className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-[#165094] hover:bg-[#0F3A6D] text-white font-bold text-xs shadow-xs transition-all disabled:opacity-50 shrink-0 self-start sm:self-auto cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'Synkroniserer NFF...' : 'Oppdater fra NFF'}</span>
+          </button>
+        )}
       </div>
 
       {/* Fair Play & Suspension Warning Cards */}
@@ -143,7 +171,7 @@ export const CardsView: React.FC<CardsViewProps> = ({ cards, teams, selectedTeam
 
                 return (
                   <tr
-                    key={card.id}
+                    key={`card-row-${card.id || card.name}-${idx}`}
                     className={`hover:bg-blue-50/40 transition-colors ${
                       isSuspended ? 'bg-red-50/50' : isWarning ? 'bg-amber-50/30' : ''
                     }`}

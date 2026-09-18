@@ -22,6 +22,7 @@ interface MatchesViewProps {
   onMatchUpdated?: (updatedMatch: Match) => void;
   onSyncComplete?: () => void;
   onSelectPlayer?: (playerName: string, teamId?: string) => void;
+  onViewLineup?: (match: Match) => void;
 }
 
 export const MatchesView: React.FC<MatchesViewProps> = ({
@@ -29,7 +30,8 @@ export const MatchesView: React.FC<MatchesViewProps> = ({
   selectedTeamId,
   onMatchUpdated,
   onSyncComplete,
-  onSelectPlayer
+  onSelectPlayer,
+  onViewLineup,
 }) => {
   const [onlyHomeMatches, setOnlyHomeMatches] = useState(false);
   const [seasonFilter, setSeasonFilter] = useState<'all' | 'host' | 'var'>('all');
@@ -434,6 +436,15 @@ export const MatchesView: React.FC<MatchesViewProps> = ({
                       </button>
 
                       <div className="flex items-center space-x-1.5">
+                        {onViewLineup && (
+                          <button
+                            onClick={() => onViewLineup(match)}
+                            className="flex items-center space-x-1 px-2.5 py-1.2 rounded-lg text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs transition-all active:scale-95 cursor-pointer"
+                            title="Se lagoppstilling og taktikk for Bønes"
+                          >
+                            <span>⚽ Oppstilling</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => handleScrapeMatchEvents(match)}
                           disabled={isLoadingEvents}

@@ -1,19 +1,23 @@
 import React, { useState } from 'react';
 import { TopScorer, TeamInfo } from '../types.js';
-import { Flame, Award, Crosshair, Target, ChevronDown, User, TrendingUp, Sparkles } from 'lucide-react';
+import { Flame, Award, Crosshair, Target, ChevronDown, User, TrendingUp, Sparkles, RefreshCw, CheckCircle2 } from 'lucide-react';
 
 interface TopScorersViewProps {
   topScorers: TopScorer[];
   teams: TeamInfo[];
   selectedTeamId: string;
   onSelectPlayer?: (playerName: string, teamId?: string) => void;
+  onSyncRealData?: () => void;
+  isSyncing?: boolean;
 }
 
 export const TopScorersView: React.FC<TopScorersViewProps> = ({
   topScorers,
   teams,
   selectedTeamId,
-  onSelectPlayer
+  onSelectPlayer,
+  onSyncRealData,
+  isSyncing
 }) => {
   const [localTeamFilter, setLocalTeamFilter] = useState<string>(selectedTeamId);
 
@@ -27,17 +31,36 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
   return (
     <div id="topscorers-view-container" className="space-y-4">
       
-      {/* Informative helper note */}
-      <div className="bg-gradient-to-r from-blue-50 via-slate-50 to-amber-50 border border-blue-200/80 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-slate-700 shadow-2xs">
-        <div className="flex items-center space-x-2">
-          <Sparkles className="w-4 h-4 text-[#165094] shrink-0" />
-          <span>
-            <strong>Klikkbare spillere:</strong> Trykk på et spillernavn nedenfor for å åpne spillerens detaljerte sesonghistorikk, inkludert formkurve og totalt spilte kamper i vår- og høstsesongen.
-          </span>
+      {/* Real NFF sync & info banner */}
+      <div className="bg-gradient-to-r from-emerald-50 via-blue-50 to-amber-50 border border-emerald-200/80 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-700 shadow-2xs">
+        <div className="flex items-start sm:items-center space-x-2.5">
+          <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+            <CheckCircle2 className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="flex items-center space-x-2">
+              <strong className="text-slate-900 font-extrabold text-sm">100% Ekte Bønes-spillere</strong>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-mono font-bold text-[10px]">
+                {topScorers.length} målscorere
+              </span>
+            </div>
+            <p className="text-slate-600 text-[11px] mt-0.5">
+              Utledet direkte fra NFF fotball.no kamphendelser for alle 16 Bønes-lag. Klikk på en spiller for å se kampstatistikk og formkurve.
+            </p>
+          </div>
         </div>
-        <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-blue-100 text-blue-900 border border-blue-200">
-          NFF Hordaland 2026
-        </span>
+
+        {onSyncRealData && (
+          <button
+            id="sync-real-scorers-btn"
+            onClick={onSyncRealData}
+            disabled={isSyncing}
+            className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-[#165094] hover:bg-[#0F3A6D] text-white font-bold text-xs shadow-xs transition-all disabled:opacity-50 shrink-0 self-start sm:self-auto cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'Synkroniserer NFF...' : 'Oppdater fra NFF'}</span>
+          </button>
+        )}
       </div>
 
       {/* Top 3 Featured Podiums (if viewing all or enough scorers) */}
@@ -47,8 +70,8 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
             const isLeader = idx === 0;
             return (
               <div
-                key={scorer.id}
-                id={`scorer-podium-${scorer.id}`}
+                key={`podium-${scorer.id || scorer.name}-${idx}`}
+                id={`scorer-podium-${scorer.id || idx}`}
                 onClick={() => onSelectPlayer?.(scorer.name, scorer.teamId)}
                 role="button"
                 tabIndex={0}
@@ -175,7 +198,7 @@ export const TopScorersView: React.FC<TopScorersViewProps> = ({
 
                 return (
                   <tr
-                    key={scorer.id}
+                    key={`scorer-row-${scorer.id || scorer.name}-${index}`}
                     className={`hover:bg-blue-50/40 transition-colors ${
                       isLeader ? 'bg-amber-50/40 font-semibold' : ''
                     }`}

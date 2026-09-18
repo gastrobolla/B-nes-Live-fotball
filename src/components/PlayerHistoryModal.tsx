@@ -576,7 +576,15 @@ export const PlayerHistoryModal: React.FC<PlayerHistoryModalProps> = ({
                               </span>
                             )}
                             {log.goals === 0 && !log.yellowCard && !log.redCard && (
-                              <span className="text-slate-400 text-[11px]">{log.minutes} min</span>
+                              <span className="text-slate-500 text-[11px] inline-flex items-center gap-1 font-medium">
+                                {(player.position === 'Keeper' || player.position === 'Forsvar') && log.rating >= 7.5 ? (
+                                  <span className="text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                    🛡️ Solid innsats ({log.minutes} min)
+                                  </span>
+                                ) : (
+                                  <span>{log.minutes} min spilt</span>
+                                )}
+                              </span>
                             )}
                           </div>
                         </td>

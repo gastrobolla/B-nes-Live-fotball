@@ -14,6 +14,37 @@ export interface ScrapedClubData {
 }
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const DEFAULT_TIMEOUT_MS = 8000;
+
+/**
+ * Robust fetch wrapper with timeout and error handling.
+ */
+export async function fetchWithTimeout(url: string, timeoutMs: number = DEFAULT_TIMEOUT_MS, headers: Record<string, string> = {}): Promise<Response | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'nb-NO,nb;q=0.9,no;q=0.8,nn;q=0.7,en-US;q=0.6,en;q=0.5',
+        ...headers
+      }
+    });
+    return res;
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      console.warn(`[Scraper] Request timeout after ${timeoutMs}ms for ${url}`);
+    } else {
+      console.warn(`[Scraper] Network error for ${url}:`, err.message);
+    }
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 export const BONES_16_TEAMS = [
   { id: 'g13-1', name: 'Bønes G13-1', shortName: 'G13-1', fiksId: 173951, tourneyId: 210280, springTourneyId: 207279, division: 'G13 1. div. avd. 02 høst', springDivision: 'G13 1. div. avd. 03 vår', category: 'Ungdom' as const, krets: 'NFF Hordaland', homeGround: 'Fjellsdalen idrettsplass / Bønes fotballbane', nffCode: 'NFF-HOR-G13-02H' },
@@ -35,18 +66,29 @@ export const BONES_16_TEAMS = [
 ];
 
 function decodeEntities(str: string): string {
+  if (!str) return '';
   return str
-    .replace(/&#xF8;/g, 'ø')
-    .replace(/&#xD8;/g, 'Ø')
-    .replace(/&#xE5;/g, 'å')
-    .replace(/&#xC5;/g, 'Å')
-    .replace(/&#xE6;/g, 'æ')
-    .replace(/&#xC6;/g, 'Æ')
+    .replace(/&#xF8;/gi, 'ø')
+    .replace(/&#xD8;/gi, 'Ø')
+    .replace(/&#xE5;/gi, 'å')
+    .replace(/&#xC5;/gi, 'Å')
+    .replace(/&#xE6;/gi, 'æ')
+    .replace(/&#xC6;/gi, 'Æ')
+    .replace(/&aring;/gi, 'å')
+    .replace(/&Aring;/gi, 'Å')
+    .replace(/&aelig;/gi, 'æ')
+    .replace(/&AElig;/gi, 'Æ')
+    .replace(/&oslash;/gi, 'ø')
+    .replace(/&Oslash;/gi, 'Ø')
     .replace(/&#x2212;/g, '-')
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&apos;/gi, "'")
     .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
     .trim();
 }
 
@@ -55,11 +97,9 @@ function decodeEntities(str: string): string {
  */
 async function scrapeTeamTable(tourneyId: number, teamId: string, teamName: string, divisionName: string): Promise<DivisionTable | null> {
   try {
-    const res = await fetch(`https://www.fotball.no/fotballdata/turnering/tabell/?fiksId=${tourneyId}`, {
-      headers: { 'User-Agent': USER_AGENT }
-    });
-    if (!res.ok) {
-      console.warn(`[Scraper] fotball.no returned HTTP ${res.status} for division ${tourneyId} (${teamName})`);
+    const res = await fetchWithTimeout(`https://www.fotball.no/fotballdata/turnering/tabell/?fiksId=${tourneyId}`, 9000);
+    if (!res || !res.ok) {
+      console.warn(`[Scraper] fotball.no table unavailable for division ${tourneyId} (${teamName})`);
       return null;
     }
     const html = await res.text();
@@ -184,14 +224,17 @@ async function scrapeTeamTable(tourneyId: number, teamId: string, teamName: stri
 async function scrapeTeamMatches(fiksId: number, teamId: string, teamName: string, divisionName: string): Promise<Match[]> {
   const matches: Match[] = [];
   try {
-    const res = await fetch(`https://www.fotball.no/fotballdata/lag/hjem/?fiksId=${fiksId}`, {
-      headers: { 'User-Agent': USER_AGENT }
-    });
-    if (!res.ok) return [];
+    const res = await fetchWithTimeout(`https://www.fotball.no/fotballdata/lag/hjem/?fiksId=${fiksId}`, 9000);
+    if (!res || !res.ok) return [];
     const html = await res.text();
     const regex = /<a\s+[^>]*href="\/fotballdata\/kamp\/\?fiksId=(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
     let m;
     const seen = new Set<string>();
+
+    const teamMeta = BONES_16_TEAMS.find(t => t.id === teamId);
+    const todayStr = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
     while ((m = regex.exec(html)) !== null) {
       const kampId = m[1];
@@ -214,8 +257,9 @@ async function scrapeTeamMatches(fiksId: number, teamId: string, teamName: strin
         const isHome = homeTeam.toLowerCase().includes('bønes');
 
         let status: 'upcoming' | 'finished' | 'live' = 'upcoming';
-        let homeScore: number | undefined = undefined;
-        let awayScore: number | undefined = undefined;
+        let homeScore: number | null = null;
+        let awayScore: number | null = null;
+        let currentMinute: number | undefined = undefined;
 
         if (endResult) {
           status = 'finished';
@@ -229,8 +273,23 @@ async function scrapeTeamMatches(fiksId: number, teamId: string, teamName: strin
         const dMatch = rawDate.match(/(\d{2})\.(\d{2})\.(\d{2})/);
         const isoDate = dMatch ? `20${dMatch[3]}-${dMatch[2]}-${dMatch[1]}` : '2026-09-20';
 
+        // Check if match is live right now
+        if (isoDate === todayStr && status !== 'finished') {
+          const timeParts = time.split(':').map(Number);
+          if (timeParts.length >= 2 && !isNaN(timeParts[0])) {
+            const matchStartMinutes = timeParts[0] * 60 + timeParts[1];
+            if (currentMinutes >= matchStartMinutes && currentMinutes <= matchStartMinutes + 110) {
+              status = 'live';
+              currentMinute = Math.min(90, Math.max(1, currentMinutes - matchStartMinutes));
+              homeScore = homeScore ?? 0;
+              awayScore = awayScore ?? 0;
+            }
+          }
+        }
+
         matches.push({
           id: `nff-${kampId}`,
+          fiksId: parseInt(kampId, 10) || undefined,
           teamId,
           teamName,
           division: divisionName,
@@ -245,6 +304,8 @@ async function scrapeTeamMatches(fiksId: number, teamId: string, teamName: strin
           status,
           homeScore,
           awayScore,
+          currentMinute,
+          category: teamMeta?.category || 'Ungdom',
           referee: 'NFF Hordaland dommer'
         });
       }
@@ -369,18 +430,27 @@ export async function runFullClubScrape(): Promise<ScrapedClubData> {
   // Scrape club news from bonesil.no
   const bonesNews = await scrapeBonesWebsite();
 
+  // Deduplicate matches by stable match id
+  const matchMap = new Map<string, Match>();
+  for (const m of allMatches) {
+    if (!matchMap.has(m.id)) {
+      matchMap.set(m.id, m);
+    }
+  }
+  const deduplicatedMatches = Array.from(matchMap.values());
+
   // Sort matches by date descending
-  allMatches.sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  deduplicatedMatches.sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
 
   // If scrape succeeded with matches, cache them
-  if (allMatches.length > 0) {
+  if (deduplicatedMatches.length > 0) {
     try {
       const jsonPath = path.resolve(process.cwd(), './server/scrapedData16.json');
       const existing = fs.existsSync(jsonPath) ? JSON.parse(fs.readFileSync(jsonPath, 'utf-8')) : {};
       fs.writeFileSync(jsonPath, JSON.stringify({
         ...existing,
         tables,
-        matches: allMatches,
+        matches: deduplicatedMatches,
         lastScraped: new Date().toISOString()
       }, null, 2));
     } catch (e) {
@@ -404,7 +474,7 @@ export async function runFullClubScrape(): Promise<ScrapedClubData> {
 
   const result: ScrapedClubData = {
     tables,
-    matches: allMatches,
+    matches: deduplicatedMatches,
     topScorers,
     cards,
     clubNews: bonesNews,
@@ -426,49 +496,54 @@ export async function scrapeMatchEvents(match: Match): Promise<MatchEvent[]> {
 
   if (kampId) {
     try {
-      const res = await fetch(`https://www.fotball.no/fotballdata/kamp/?fiksId=${kampId}`, {
-        headers: { 'User-Agent': USER_AGENT }
-      });
-      if (res.ok) {
+      const res = await fetchWithTimeout(`https://www.fotball.no/fotballdata/kamp/?fiksId=${kampId}`, 8000);
+      if (res && res.ok) {
         const html = await res.text();
-        const lineMatches = [...html.matchAll(/class="timelineEventLine\s+([^"]+)"[\s\S]*?<div class="timelineEvent"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi)];
+        const eventLineRegex = /<div[^>]*class="timelineEventLine\s+([^"]+)"[^>]*>([\s\S]*?)(?=<div[^>]*class="timelineEventLine|<\/section>|$)/gi;
+        let lineMatch;
+        let idx = 0;
 
-        for (let i = 0; i < lineMatches.length; i++) {
-          const side = lineMatches[i][1];
-          const text = lineMatches[i][2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-          const isHome = side.includes('homeTeam');
+        while ((lineMatch = eventLineRegex.exec(html)) !== null) {
+          const sideClass = lineMatch[1];
+          const block = lineMatch[2];
+          const isHome = sideClass.includes('homeTeam');
           const teamName = isHome ? match.homeTeam : match.awayTeam;
 
-          const minMatch = text.match(/(\d+)\s*(?:'|&apos;)/);
-          const minute = minMatch ? parseInt(minMatch[1], 10) : (i + 1) * 15;
+          const minMatch = block.match(/class="timelineMinute"[^>]*>\s*(\d+)/i) || block.match(/(\d+)\s*(?:'|&apos;)/i);
+          const minute = minMatch ? parseInt(minMatch[1], 10) : (idx + 1) * 10;
 
-          let type: 'goal' | 'yellow_card' | 'red_card' | 'sub' = 'goal';
-          let description = text;
-
-          if (/mål|spillemål|straffespark/i.test(text)) {
-            type = 'goal';
-          } else if (/advarsel|gult/i.test(text)) {
-            type = 'yellow_card';
-          } else if (/utvisning|rødt/i.test(text)) {
-            type = 'red_card';
-          } else if (/bytte|innbytte/i.test(text)) {
-            type = 'sub';
+          const pMatch = block.match(/class="eventHeading"[^>]*>([^<]+)/i);
+          let playerName = pMatch ? decodeEntities(pMatch[1].trim()) : undefined;
+          if (playerName && (playerName.toLowerCase().includes('personinfo ikke') || playerName.toLowerCase().includes('ikke tilgjengelig'))) {
+            playerName = undefined;
           }
 
-          // Extract player name
-          const cleanText = decodeEntities(text).replace(/\s+/g, ' ');
-          const playerMatch = cleanText.match(/\d+\s*'\s*([^,]+?)(?:\s+(?:Spillemål|Straffespark|Advarsel|Utvisning|Innbytte)|$)/i);
-          const playerName = playerMatch ? playerMatch[1].trim() : undefined;
+          const typeMatch = block.match(/<div class="timelineEventContent">[\s\S]*?<div>([^<]+)<\/div>/i);
+          const rawType = typeMatch ? decodeEntities(typeMatch[1].trim()) : block;
+
+          let type: 'goal' | 'yellow_card' | 'red_card' | 'sub' = 'goal';
+          if (/advarsel|gult/i.test(rawType)) {
+            type = 'yellow_card';
+          } else if (/utvisning|rødt/i.test(rawType)) {
+            type = 'red_card';
+          } else if (/bytte|innbytte/i.test(rawType)) {
+            type = 'sub';
+          } else if (/mål|spillemål|straffespark|straffemål|scoring/i.test(rawType)) {
+            type = 'goal';
+          }
+
+          const description = `${minute}' ${rawType || type}${playerName ? `: ${playerName}` : ''} (${teamName})`;
 
           events.push({
-            id: `ev-${kampId}-${i}`,
+            id: `ev-${kampId}-${idx}`,
             minute,
             type,
             player: playerName,
             team: teamName,
-            description: cleanText,
+            description,
             source: 'NFF'
           });
+          idx++;
         }
       }
     } catch (err: any) {

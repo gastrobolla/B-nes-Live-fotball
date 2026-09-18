@@ -14658,50 +14658,36 @@
   ],
   "scanner": {
     "isActive": true,
-    "lastScanned": "08:43:53",
-    "nextScanSeconds": 60,
+    "lastScanned": "08:42:53",
+    "nextScanSeconds": 16,
     "autoScanEnabled": true,
     "sources": [
       {
         "name": "NFF fotball.no",
         "url": "https://www.fotball.no",
         "status": "synced",
-        "lastSync": "Sjekket 08:43"
+        "lastSync": "Sjekket 08:42"
       },
       {
         "name": "NFF FIKS",
         "url": "https://fiks.fotball.no",
         "status": "synced",
-        "lastSync": "Sjekket 08:43"
+        "lastSync": "Sjekket 08:42"
       },
       {
         "name": "MinFotball",
         "url": "https://minfotball.fotball.no",
         "status": "synced",
-        "lastSync": "Sjekket 08:43"
+        "lastSync": "Sjekket 08:42"
       },
       {
         "name": "bonesil.no Scraper",
         "url": "https://www.bonesil.no",
         "status": "synced",
-        "lastSync": "Sjekket 08:43"
+        "lastSync": "Sjekket 08:42"
       }
     ],
     "logs": [
-      {
-        "id": "log-1789721033260-sj02",
-        "timestamp": "08:43:53",
-        "level": "info",
-        "source": "Kampvindu Skanner",
-        "message": "Sjekker NFF for 1 aktive kamper..."
-      },
-      {
-        "id": "log-1789721017941-eogh",
-        "timestamp": "08:43:37",
-        "level": "success",
-        "source": "NFF Hendelsesskanning",
-        "message": "Fullførte skanning for 50 kamper. 57 ekte Bønes-målscorere og 12 spillere med disiplinærkort oppdatert."
-      },
       {
         "id": "log-1789721016093-rg7x",
         "timestamp": "08:43:36",
@@ -14894,6 +14880,20 @@
       {
         "id": "log-1789719684962-brlk",
         "timestamp": "08:21:24",
+        "level": "info",
+        "source": "Kampvindu Skanner",
+        "message": "Sjekker NFF for 1 aktive kamper..."
+      },
+      {
+        "id": "log-1789719624918-rlme",
+        "timestamp": "08:20:24",
+        "level": "info",
+        "source": "Kampvindu Skanner",
+        "message": "Sjekker NFF for 1 aktive kamper..."
+      },
+      {
+        "id": "log-1789719564873-9yq0",
+        "timestamp": "08:19:24",
         "level": "info",
         "source": "Kampvindu Skanner",
         "message": "Sjekker NFF for 1 aktive kamper..."
@@ -15098,8 +15098,8 @@
   "dailyScrapeSchedule": "Aktiv (automatisk skanning hver 24. time / kl. 06:00, samt hvert minutt i kampvinduer)",
   "nextDailyScrape": "19.9.2026, 08:40:01",
   "isScrapingNow": false,
-  "dataVersion": 451,
-  "lastDiskSaved": "18.9.2026, 08:43:53",
+  "dataVersion": 450,
+  "lastDiskSaved": "18.9.2026, 08:43:37",
   "activeMatchWindow": true,
   "matchWindowDetails": "🟢 Kampvindu aktivt: Askøy vs Bønes G19-1 (20:00). NFF sjekkes hvert 60. sekund.",
   "processedEventIds": [

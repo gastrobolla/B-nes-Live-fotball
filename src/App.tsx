@@ -8,10 +8,14 @@ import { TablesView } from './components/TablesView.js';
 import { TopScorersView } from './components/TopScorersView.js';
 import { CardsView } from './components/CardsView.js';
 import { LiveFeedView } from './components/LiveFeedView.js';
+import { LivescoreDashboard } from './components/LivescoreDashboard.js';
 import { NffHubView } from './components/NffHubView.js';
 import { ScannerStatusDrawer } from './components/ScannerStatusDrawer.js';
 import { AiAnalysisModal } from './components/AiAnalysisModal.js';
 import { PlayerHistoryModal } from './components/PlayerHistoryModal.js';
+import { LineupModal } from './components/LineupModal.js';
+import { SquadRosterTab } from './components/SquadRosterTab.js';
+import { OfflineBanner } from './components/OfflineBanner.js';
 import { buildPlayerProfile } from './utils/playerHistory.js';
 import {
   Calendar,
@@ -28,7 +32,8 @@ import {
   MapPin,
   Clock,
   Activity,
-  Database
+  Database,
+  Users
 } from 'lucide-react';
 
 export default function App() {
@@ -36,11 +41,20 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<string>('all');
-  const [activeTab, setActiveTab] = useState<'feed' | 'matches' | 'tables' | 'scorers' | 'cards' | 'nff'>('feed');
+  const [activeTab, setActiveTab] = useState<'livescore' | 'feed' | 'matches' | 'tables' | 'scorers' | 'cards' | 'squads' | 'nff'>('livescore');
   const [isScannerDrawerOpen, setIsScannerDrawerOpen] = useState(false);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [isRealScraping, setIsRealScraping] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Lineup modal state
+  const [lineupMatch, setLineupMatch] = useState<Match | null>(null);
+  const [isLineupModalOpen, setIsLineupModalOpen] = useState<boolean>(false);
+
+  const handleViewLineup = (match: Match) => {
+    setLineupMatch(match);
+    setIsLineupModalOpen(true);
+  };
 
   // Player history modal state
   const [selectedPlayerName, setSelectedPlayerName] = useState<string | null>(null);
@@ -192,6 +206,14 @@ export default function App() {
         isSyncing={isRealScraping || isScanning}
         onOpenAiModal={() => setIsAiModalOpen(true)}
         onOpenScannerDrawer={() => setIsScannerDrawerOpen(true)}
+      />
+
+      {/* Network & Offline Status Banner */}
+      <OfflineBanner
+        isRealData={true}
+        lastUpdated={data.lastRealScraped}
+        isScrapingNow={isRealScraping}
+        onRefresh={handleRealScrape}
       />
 
       {/* Live Match Ticker Banner (Always visible if live match is active) */}
@@ -388,6 +410,27 @@ export default function App() {
         <section id="navigation-tabs" className="border-b border-slate-200 pb-2">
           <div className="flex items-center space-x-2 sm:space-x-4 overflow-x-auto scrollbar-none">
             
+            {/* Tab: Livescore (SofaScore / Flashscore-light) */}
+            <button
+              id="main-tab-livescore"
+              onClick={() => setActiveTab('livescore')}
+              className={`flex items-center space-x-2 py-2 px-3 sm:px-4 rounded-lg text-xs sm:text-sm font-bold transition-all ${
+                activeTab === 'livescore'
+                  ? 'bg-[#165094] text-white shadow-sm ring-1 ring-[#165094]'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <div className="flex items-center space-x-1.5">
+                <Radio className={`w-4 h-4 ${data.matches.some(m => m.status === 'live') ? 'text-red-400 animate-pulse' : 'text-slate-400'}`} />
+                <span>Livescore</span>
+              </div>
+              {data.matches.some(m => m.status === 'live') && (
+                <span className="bg-red-500 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full animate-pulse">
+                  {data.matches.filter(m => m.status === 'live').length} LIVE
+                </span>
+              )}
+            </button>
+
             {/* Tab: Live Feed */}
             <button
               id="main-tab-feed"
@@ -481,6 +524,25 @@ export default function App() {
               </span>
             </button>
 
+            {/* Tab: Spillerlister & Tropper */}
+            <button
+              id="main-tab-squads"
+              onClick={() => setActiveTab('squads')}
+              className={`flex items-center space-x-2 py-2 px-3 sm:px-4 rounded-xl text-xs sm:text-sm font-bold transition-all shadow-xs ${
+                activeTab === 'squads'
+                  ? 'bg-emerald-700 text-white shadow-md ring-2 ring-emerald-400/50'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <Users className="w-4 h-4 text-emerald-400" />
+              <span>Spillerlister & Tropper</span>
+              <span className={`ml-1 text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold ${
+                activeTab === 'squads' ? 'bg-emerald-950 text-emerald-200' : 'bg-slate-200 text-slate-700'
+              }`}>
+                16 lag
+              </span>
+            </button>
+
             {/* Tab: Offisiell NFF & MinFotball (Alternativ 3) */}
             <button
               id="main-tab-nff"
@@ -504,6 +566,15 @@ export default function App() {
         </section>
 
         {/* View Panes */}
+        {activeTab === 'livescore' && (
+          <LivescoreDashboard
+            data={data}
+            onRefreshData={fetchData}
+            onSelectPlayer={handleSelectPlayer}
+            onViewLineup={handleViewLineup}
+          />
+        )}
+
         {activeTab === 'feed' && (
           <LiveFeedView
             feed={data.feed || []}
@@ -520,6 +591,7 @@ export default function App() {
             selectedTeamId={selectedTeamId}
             onSyncComplete={fetchData}
             onSelectPlayer={handleSelectPlayer}
+            onViewLineup={handleViewLineup}
             onMatchUpdated={(updatedMatch) => {
               setData(prev => {
                 if (!prev) return prev;
@@ -541,12 +613,23 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'squads' && (
+          <SquadRosterTab
+            teams={data.teams}
+            selectedTeamId={selectedTeamId === 'all' || selectedTeamId === 'herrer-a' ? 'menn-1' : selectedTeamId}
+            onSelectTeamId={(id) => setSelectedTeamId(id)}
+            onSelectPlayer={handleSelectPlayer}
+          />
+        )}
+
         {activeTab === 'scorers' && (
           <TopScorersView
             topScorers={data.topScorers}
             teams={data.teams}
             selectedTeamId={selectedTeamId}
             onSelectPlayer={handleSelectPlayer}
+            onSyncRealData={handleRealScrape}
+            isSyncing={isRealScraping}
           />
         )}
 
@@ -556,6 +639,8 @@ export default function App() {
             teams={data.teams}
             selectedTeamId={selectedTeamId}
             onSelectPlayer={handleSelectPlayer}
+            onSyncRealData={handleRealScrape}
+            isSyncing={isRealScraping}
           />
         )}
 
@@ -614,8 +699,20 @@ export default function App() {
         <PlayerHistoryModal
           player={activePlayerProfile}
           onClose={() => setSelectedPlayerName(null)}
+          onSelectTeam={(teamId) => {
+            setSelectedTeamId(teamId);
+            setActiveTab('tables');
+          }}
         />
       )}
+
+      {/* Match Lineup / Lagoppstilling Modal */}
+      <LineupModal
+        match={lineupMatch}
+        isOpen={isLineupModalOpen}
+        onClose={() => setIsLineupModalOpen(false)}
+        onSelectPlayer={handleSelectPlayer}
+      />
 
     </div>
   );

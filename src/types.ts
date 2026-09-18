@@ -122,6 +122,36 @@ export interface PlayerProfile {
   matchHistory: PlayerMatchLog[];
 }
 
+export type PlayerPosition = 'Keeper' | 'Forsvar' | 'Midtbane' | 'Angrep';
+
+export interface Player {
+  id: string;
+  name: string;
+  teamId: string;
+  teamName: string;
+  jerseyNumber: number;
+  position: PlayerPosition;
+  fiksId?: number;
+  role?: 'Kaptein' | 'Visekaptein' | 'Spiller';
+  matches: number;
+  goals: number;
+  assists?: number;
+  yellowCards: number;
+  redCards: number;
+  isStarter?: boolean;
+}
+
+export interface MatchLineup {
+  formation?: string;
+  starters: Player[];
+  bench: Player[];
+  coach?: string;
+  teamName?: string;
+}
+
+export type MatchStatus = 'upcoming' | 'live' | 'finished';
+export type QuickCategoryFilter = 'all' | 'gutter' | 'jenter' | 'senior';
+
 export interface MatchEvent {
   id: string;
   minute: number;
@@ -134,28 +164,34 @@ export interface MatchEvent {
 }
 
 export interface Match {
-  id: string;
+  id: string; // e.g. "nff-8051234"
+  fiksId?: number;
   teamId: string;
   teamName: string;
   division: string;
-  round: string;
+  round?: string;
   homeTeam: string;
   awayTeam: string;
   isHome: boolean; // true if Bønes is the home team
-  date: string;
-  time: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:MM
   venue: string;
-  venueCity: string;
-  status: 'upcoming' | 'live' | 'finished';
-  homeScore?: number;
-  awayScore?: number;
+  venueCity?: string;
+  status: MatchStatus;
+  homeScore?: number | null;
+  awayScore?: number | null;
   currentMinute?: number;
   referee?: string;
   events?: MatchEvent[];
   attendance?: number;
+  season?: string;
+  category?: TeamCategory;
   lastUpdatedSource?: 'NFF' | 'lagleder' | 'official';
   lastUpdatedAt?: string;
   reportedBy?: string;
+  lineup?: MatchLineup;
+  homeLineup?: MatchLineup;
+  awayLineup?: MatchLineup;
 }
 
 export interface ScanLog {
@@ -211,6 +247,7 @@ export interface BonesClubData {
   topScorers: TopScorer[];
   cards: CardStatistic[];
   matches: Match[];
+  players?: Player[];
   scanner: ScannerState;
   feed: FeedItem[];
   stats: {

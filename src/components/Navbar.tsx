@@ -1,6 +1,7 @@
 import React from 'react';
 import { RefreshCw, Radio, Shield, Sparkles, Activity } from 'lucide-react';
 import { ScannerState } from '../types.js';
+import { PWAInstallButton } from './PWAInstallButton.js';
 
 interface NavbarProps {
   scanner: ScannerState;
@@ -70,6 +71,9 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="hidden lg:inline text-slate-400">Neste skann:</span>
               <span className="font-mono font-bold text-blue-300">{scanner.nextScanSeconds}s</span>
             </button>
+
+            {/* PWA Install Button */}
+            <PWAInstallButton compact />
 
             {/* AI Assistant Insight */}
             <button
